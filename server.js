@@ -8,6 +8,7 @@ const fs = require('fs');
 const db = require('./db');
 const seed = require('./seed');
 const mailer = require('./mailer');
+const payments = require('./payments');
 const theme = require('./public/theme.js');
 
 const PORT = process.env.PORT || 3000;
@@ -204,6 +205,8 @@ app.use('/api', express.json({ limit: '6mb' }));
 // Protección CSRF: las escrituras deben ser JSON y del mismo origen.
 app.use('/api', (req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  // Los avisos de Mercado Pago vienen de sus servidores; se verifican consultando su API.
+  if (req.path === '/mp/webhook') return next();
   if (!req.is('application/json')) return next(new HttpError(415, 'Formato no soportado.'));
   const origin = req.get('origin');
   if (origin && new URL(origin).host !== req.get('host')) {
@@ -280,7 +283,8 @@ app.get(
       appearance: theme.normalize(await getContent('appearance')),
       books: books.map(bookOut),
       me: publicUser(req.user),
-      ...(isAdmin ? { mail: mailer.mailStatus() } : {}),
+      payments: { mercadopago: payments.mpEnabled() },
+      ...(isAdmin ? { mail: mailer.mailStatus(), mpMode: payments.mpMode() } : {}),
     });
   })
 );
@@ -556,6 +560,9 @@ function orderOut(o) {
     notes: o.notes,
     createdAt: o.created_at,
     emailStatus: parseJson(o.email_status || '', null),
+    paymentMethod: o.payment_method || 'transferencia',
+    mpStatus: o.mp_status || '',
+    mpPaymentId: o.mp_payment_id || '',
     customer: o.customer_name ? { name: o.customer_name, email: o.customer_email, phone: o.customer_phone } : undefined,
   };
 }
@@ -600,6 +607,10 @@ app.post(
       }
     }
     const notes = str(req.body.notes, 600, { field: 'las notas' });
+    const paymentMethod = req.body.payment === 'mercadopago' ? 'mercadopago' : 'transferencia';
+    if (paymentMethod === 'mercadopago' && !payments.mpEnabled()) {
+      throw new HttpError(400, 'El pago con Mercado Pago no está disponible en este momento. Elegí transferencia.');
+    }
 
     // Precios y stock salen de la base, nunca del navegador.
     const lines = [];
@@ -629,8 +640,8 @@ app.post(
     const shippingCost = method === 'envio' && !(free && subtotal >= free) ? Number(settings.shippingCost) || 0 : 0;
 
     const row = await db.get(
-      `INSERT INTO orders (user_id, items, subtotal, shipping_cost, total, status, shipping, notes, created_at)
-       VALUES (?, ?, ?, ?, ?, 'pendiente', ?, ?, ?) RETURNING id`,
+      `INSERT INTO orders (user_id, items, subtotal, shipping_cost, total, status, shipping, notes, created_at, payment_method)
+       VALUES (?, ?, ?, ?, ?, 'pendiente', ?, ?, ?, ?) RETURNING id`,
       [
         req.user.id,
         JSON.stringify(lines),
@@ -640,6 +651,7 @@ app.post(
         JSON.stringify({ method, phone, ...address }),
         notes,
         now(),
+        paymentMethod,
       ]
     );
 
@@ -649,15 +661,108 @@ app.post(
 
     const order = await db.get('SELECT * FROM orders WHERE id = ?', [row.id]);
     const mail = mailer.mailStatus();
+    let payUrl = '';
+    let payError = '';
+    if (paymentMethod === 'mercadopago') {
+      try {
+        payUrl = (await payments.createPreference({ order: orderOut(order), customer: req.user, siteName: settings.siteName, siteUrl: siteUrl(req) })).url;
+      } catch (err) {
+        console.error('Mercado Pago, pedido', order.id, err.message);
+        payError = `${err.message} Tu pedido quedó guardado: podés pagarlo desde Mi cuenta.`;
+      }
+    }
     res.status(201).json({
       order: orderOut(order),
       paymentInstructions: settings.paymentInstructions || '',
       emailSent: mail.configured,
+      payUrl,
+      payError,
     });
     // Los mails salen después de responder, así el comprador no espera.
     notifyOrder(order, siteUrl(req)).catch((err) => console.error('Mails del pedido', order.id, err));
   })
 );
+
+// ---------- Mercado Pago ----------
+
+// Pagar (o reintentar el pago de) un pedido pendiente propio.
+app.post(
+  '/api/orders/:id/pay',
+  requireUser,
+  wrap(async (req, res) => {
+    if (!payments.mpEnabled()) throw new HttpError(400, 'El pago con Mercado Pago no está disponible.');
+    const order = await db.get('SELECT * FROM orders WHERE id = ? AND user_id = ?', [Number(req.params.id), req.user.id]);
+    if (!order) throw new HttpError(404, 'No encontramos ese pedido en tu cuenta.');
+    if (order.status !== 'pendiente') throw new HttpError(400, 'Este pedido ya no está pendiente de pago.');
+    const settings = (await getContent('settings')) || {};
+    const { url } = await payments.createPreference({ order: orderOut(order), customer: req.user, siteName: settings.siteName, siteUrl: siteUrl(req) }).catch((err) => {
+      throw new HttpError(502, err.message);
+    });
+    if (order.payment_method !== 'mercadopago') {
+      await db.run("UPDATE orders SET payment_method = 'mercadopago' WHERE id = ?", [order.id]);
+    }
+    res.json({ payUrl: url });
+  })
+);
+
+// Verifica un pago contra la API de Mercado Pago y actualiza el pedido.
+async function applyPayment(paymentId, url) {
+  const p = await payments.getPayment(paymentId);
+  const orderId = Number(p.external_reference);
+  const order = orderId ? await db.get('SELECT * FROM orders WHERE id = ?', [orderId]) : null;
+  if (!order) return { orderId: null, status: p.status };
+
+  await db.run('UPDATE orders SET mp_payment_id = ?, mp_status = ? WHERE id = ?', [String(p.id), String(p.status || ''), order.id]);
+
+  const amountOk = Number(p.transaction_amount) + 0.01 >= order.total && (p.currency_id || 'ARS') === 'ARS';
+  if (p.status === 'approved' && !amountOk) {
+    console.error(`Pago ${p.id} del pedido ${order.id}: el monto no coincide (${p.transaction_amount} vs ${order.total}).`);
+  }
+  if (p.status === 'approved' && amountOk) {
+    // Solo pasa de pendiente a pagado una vez, aunque lleguen avisos repetidos.
+    const changed = await db.run("UPDATE orders SET status = 'pagado', payment_method = 'mercadopago' WHERE id = ? AND status = 'pendiente'", [order.id]);
+    if (changed) notifyPaid(order.id, url).catch((err) => console.error('Mails de pago', order.id, err.message));
+    if (!changed && order.status === 'cancelado') {
+      console.error(`Pago aprobado ${p.id} para el pedido cancelado ${order.id}: hay que devolver el dinero desde Mercado Pago.`);
+    }
+  }
+  const fresh = await db.get('SELECT status FROM orders WHERE id = ?', [order.id]);
+  return { orderId: order.id, status: p.status, statusDetail: p.status_detail || '', orderStatus: fresh.status, total: order.total };
+}
+
+// El comprador vuelve de Mercado Pago con ?payment_id=... y la página pide confirmarlo.
+app.post(
+  '/api/mp/confirm',
+  wrap(async (req, res) => {
+    if (!payments.mpEnabled()) throw new HttpError(400, 'Mercado Pago no está configurado.');
+    try {
+      res.json(await applyPayment(req.body.paymentId, siteUrl(req)));
+    } catch (err) {
+      throw new HttpError(502, err.message);
+    }
+  })
+);
+
+// Aviso automático de Mercado Pago (webhook). Se responde rápido y se verifica aparte.
+app.post('/api/mp/webhook', (req, res) => {
+  res.sendStatus(200);
+  const type = req.query.type || req.query.topic || req.body.type || req.body.topic;
+  const id = req.query['data.id'] || (req.body.data && req.body.data.id) || req.query.id;
+  if (type !== 'payment' || !id || !payments.mpEnabled()) return;
+  applyPayment(id, siteUrl(req)).catch((err) => console.error('Webhook de Mercado Pago:', err.message));
+});
+
+async function notifyPaid(orderId, url) {
+  if (!mailer.mailStatus().configured) return;
+  const orderRow = await db.get('SELECT * FROM orders WHERE id = ?', [orderId]);
+  const order = orderOut(orderRow);
+  const customer = await db.get('SELECT name, email FROM users WHERE id = ?', [orderRow.user_id]);
+  const settings = (await getContent('settings')) || {};
+  const seller = settings.notifyEmail || settings.contactEmail || '';
+  const ctx = { order, customer: customer || { name: '', email: '' }, settings, siteUrl: url, accent: await emailAccent() };
+  if (customer) await mailer.sendMail({ to: customer.email, toName: customer.name, replyTo: seller || undefined, fromName: settings.siteName, ...mailer.paidEmail({ ...ctx, forSeller: false }) }).catch(() => {});
+  if (seller) await mailer.sendMail({ to: seller, replyTo: customer ? customer.email : undefined, fromName: settings.siteName, ...mailer.paidEmail({ ...ctx, forSeller: true }) }).catch(() => {});
+}
 
 // ---------- mails de pedidos ----------
 
@@ -710,6 +815,127 @@ async function notifyOrder(orderRow, url) {
   return result;
 }
 
+// ---------- comentarios ----------
+
+const COMMENT_STATUSES = ['visible', 'pendiente', 'oculto'];
+const commentTimes = new Map(); // límite por usuario: 1 cada 30 s y 20 por día
+
+function commentOut(c, viewer) {
+  const admin = viewer && viewer.role === 'admin';
+  return {
+    id: c.id,
+    author: c.author_name || 'Cuenta eliminada',
+    authorInitials: String(c.author_name || '?').split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase(),
+    body: c.body,
+    bookId: c.book_id,
+    bookTitle: c.book_title || '',
+    status: c.status,
+    editedByAdmin: Boolean(c.edited_by_admin),
+    createdAt: c.created_at,
+    mine: Boolean(viewer && viewer.id === c.user_id),
+    ...(admin ? { reports: c.reports, authorEmail: c.author_email || '' } : {}),
+  };
+}
+
+const COMMENT_SELECT = `SELECT c.*, u.name AS author_name, u.email AS author_email, b.title AS book_title
+  FROM comments c LEFT JOIN users u ON u.id = c.user_id LEFT JOIN books b ON b.id = c.book_id`;
+
+app.get(
+  '/api/comments',
+  wrap(async (req, res) => {
+    const settings = (await getContent('settings')) || {};
+    const isAdmin = req.user && req.user.role === 'admin';
+    let rows;
+    if (isAdmin) {
+      rows = await db.all(`${COMMENT_SELECT} ORDER BY c.id DESC LIMIT 300`);
+    } else {
+      // Visibles para todos, más los propios que esperan aprobación.
+      rows = await db.all(`${COMMENT_SELECT} WHERE c.status = 'visible' OR (c.status = 'pendiente' AND c.user_id = ?) ORDER BY c.id DESC LIMIT 200`, [
+        req.user ? req.user.id : -1,
+      ]);
+    }
+    let reported = [];
+    if (req.user) {
+      reported = (await db.all('SELECT comment_id FROM comment_reports WHERE user_id = ?', [req.user.id])).map((r) => r.comment_id);
+    }
+    res.json({
+      enabled: settings.commentsEnabled !== false,
+      moderation: Boolean(settings.commentsModeration),
+      rules: settings.commentRules || '',
+      comments: rows.map((c) => ({ ...commentOut(c, req.user), reportedByMe: reported.includes(c.id) })),
+    });
+  })
+);
+
+app.post(
+  '/api/comments',
+  requireUser,
+  wrap(async (req, res) => {
+    const settings = (await getContent('settings')) || {};
+    if (settings.commentsEnabled === false) throw new HttpError(403, 'Los comentarios están cerrados por ahora.');
+    const body = str(req.body.body, 1000, { required: true, field: 'tu comentario' });
+    if (body.length < 3) throw new HttpError(400, 'El comentario es demasiado corto.');
+    let bookId = null;
+    if (req.body.bookId) {
+      bookId = int(req.body.bookId, 1, 1e9, 'El libro');
+      if (!(await db.get('SELECT id FROM books WHERE id = ? AND published = 1', [bookId]))) bookId = null;
+    }
+    if (req.user.role !== 'admin') {
+      const t = Date.now();
+      const list = (commentTimes.get(req.user.id) || []).filter((x) => x > t - 86400000);
+      if (list.length && t - list[list.length - 1] < 30000) throw new HttpError(429, 'Esperá unos segundos antes de publicar otro comentario.');
+      if (list.length >= 20) throw new HttpError(429, 'Llegaste al máximo de comentarios por hoy.');
+      list.push(t);
+      commentTimes.set(req.user.id, list);
+    }
+    const status = settings.commentsModeration && req.user.role !== 'admin' ? 'pendiente' : 'visible';
+    const row = await db.get(
+      'INSERT INTO comments (user_id, book_id, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+      [req.user.id, bookId, body, status, now(), now()]
+    );
+    const c = await db.get(`${COMMENT_SELECT} WHERE c.id = ?`, [row.id]);
+    res.status(201).json({ comment: commentOut(c, req.user) });
+    if (status === 'pendiente') notifyCommentPending(c, req).catch(() => {});
+  })
+);
+
+async function notifyCommentPending(c, req) {
+  if (!mailer.mailStatus().configured) return;
+  const settings = (await getContent('settings')) || {};
+  const seller = settings.notifyEmail || settings.contactEmail;
+  if (!seller) return;
+  await mailer.sendMail({ to: seller, fromName: settings.siteName, ...mailer.commentPendingEmail({ comment: c, settings, siteUrl: siteUrl(req), accent: await emailAccent() }) });
+}
+
+app.delete(
+  '/api/comments/:id',
+  requireUser,
+  wrap(async (req, res) => {
+    const c = await db.get('SELECT * FROM comments WHERE id = ?', [Number(req.params.id)]);
+    if (!c) throw new HttpError(404, 'Ese comentario ya no existe.');
+    if (c.user_id !== req.user.id && req.user.role !== 'admin') throw new HttpError(403, 'Solo podés borrar tus propios comentarios.');
+    await db.run('DELETE FROM comment_reports WHERE comment_id = ?', [c.id]);
+    await db.run('DELETE FROM comments WHERE id = ?', [c.id]);
+    res.json({ ok: true });
+  })
+);
+
+app.post(
+  '/api/comments/:id/report',
+  requireUser,
+  wrap(async (req, res) => {
+    const c = await db.get("SELECT * FROM comments WHERE id = ? AND status = 'visible'", [Number(req.params.id)]);
+    if (!c) throw new HttpError(404, 'Ese comentario ya no está visible.');
+    if (c.user_id === req.user.id) throw new HttpError(400, 'No podés denunciar tu propio comentario.');
+    if (await db.get('SELECT comment_id FROM comment_reports WHERE comment_id = ? AND user_id = ?', [c.id, req.user.id])) {
+      return res.json({ ok: true });
+    }
+    await db.run('INSERT INTO comment_reports (comment_id, user_id, created_at) VALUES (?, ?, ?)', [c.id, req.user.id, now()]);
+    await db.run('UPDATE comments SET reports = reports + 1 WHERE id = ?', [c.id]);
+    res.json({ ok: true });
+  })
+);
+
 // ---------- administración ----------
 
 const admin = express.Router();
@@ -731,6 +957,9 @@ function validateContent(key, body) {
       contactEmail: optionalEmail(body.contactEmail, 'El email de contacto'),
       notifyEmail: optionalEmail(body.notifyEmail, 'El email para avisos de pedidos'),
       paymentInstructions: str(body.paymentInstructions, 1500, { field: 'las instrucciones de pago' }),
+      commentsEnabled: body.commentsEnabled === true || body.commentsEnabled === 'on',
+      commentsModeration: body.commentsModeration === true || body.commentsModeration === 'on',
+      commentRules: str(body.commentRules, 800, { field: 'las normas de comentarios' }),
     };
   }
   if (key === 'appearance') {
@@ -923,6 +1152,29 @@ admin.post(
   })
 );
 
+admin.put(
+  '/comments/:id',
+  wrap(async (req, res) => {
+    const c = await db.get('SELECT * FROM comments WHERE id = ?', [Number(req.params.id)]);
+    if (!c) throw new HttpError(404, 'Ese comentario ya no existe.');
+    let body = c.body;
+    let edited = c.edited_by_admin;
+    if (req.body.body !== undefined) {
+      body = str(req.body.body, 1000, { required: true, field: 'el comentario' });
+      if (body !== c.body) edited = 1;
+    }
+    const status = req.body.status === undefined ? c.status : String(req.body.status);
+    if (!COMMENT_STATUSES.includes(status)) throw new HttpError(400, 'Estado de comentario inválido.');
+    await db.run('UPDATE comments SET body = ?, status = ?, edited_by_admin = ?, updated_at = ? WHERE id = ?', [body, status, edited, now(), c.id]);
+    if (req.body.clearReports) {
+      await db.run('DELETE FROM comment_reports WHERE comment_id = ?', [c.id]);
+      await db.run('UPDATE comments SET reports = 0 WHERE id = ?', [c.id]);
+    }
+    const out = await db.get(`${COMMENT_SELECT} WHERE c.id = ?`, [c.id]);
+    res.json({ comment: commentOut(out, req.user) });
+  })
+);
+
 admin.get(
   '/users',
   wrap(async (req, res) => {
@@ -1024,6 +1276,39 @@ const sendIndex = wrap(async (req, res) => {
   res.type('html').send(html);
 });
 
+// Pantalla de pago falsa, solo con MP_MOCK=1, para probar el circuito sin cuenta de Mercado Pago.
+if (payments.MOCK) {
+  app.get(
+    '/pago-simulado',
+    wrap(async (req, res) => {
+      const order = await db.get('SELECT id, total FROM orders WHERE id = ?', [Number(req.query.pedido) || 0]);
+      if (!order) return res.status(404).send('Pedido inexistente');
+      res.type('html').send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Mercado Pago (simulado)</title>
+<body style="font-family:Arial,sans-serif;background:#ededed;margin:0;padding:40px 16px;">
+<div style="max-width:420px;margin:auto;background:#fff;padding:28px;border-radius:8px;box-shadow:0 2px 10px #0002;">
+<p style="margin:0 0 4px;color:#009ee3;font-weight:bold;">Mercado Pago · MODO SIMULADO</p>
+<h1 style="font-size:22px;margin:0 0 6px;">Pedido #${order.id}</h1>
+<p style="margin:0 0 20px;font-size:18px;">Total $ ${order.total.toLocaleString('es-AR')}</p>
+<form method="post" style="display:grid;gap:10px;">
+<input type="hidden" name="pedido" value="${order.id}">
+<button name="estado" value="approved" style="padding:12px;border:0;border-radius:6px;background:#009ee3;color:#fff;font-size:16px;cursor:pointer;">Aprobar pago</button>
+<button name="estado" value="rejected" style="padding:12px;border:1px solid #ccc;border-radius:6px;background:#fff;font-size:16px;cursor:pointer;">Rechazar pago</button>
+</form></div></body>`);
+    })
+  );
+  app.post(
+    '/pago-simulado',
+    express.urlencoded({ extended: false }),
+    wrap(async (req, res) => {
+      const order = await db.get('SELECT * FROM orders WHERE id = ?', [Number(req.body.pedido) || 0]);
+      if (!order) return res.status(404).send('Pedido inexistente');
+      const status = req.body.estado === 'approved' ? 'approved' : 'rejected';
+      const id = payments.mockPay(orderOut(order), status);
+      res.redirect(303, `/pago?payment_id=${id}&status=${status}&external_reference=${order.id}`);
+    })
+  );
+}
+
 app.get(['/', '/index.html'], sendIndex);
 app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '1h' }));
 app.get('*', sendIndex);
@@ -1036,7 +1321,8 @@ app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Datos con formato inválido.' });
   const status = err.status || 500;
   if (status >= 500) console.error(err);
-  res.status(status).json({ error: status >= 500 ? 'Algo falló en el servidor. Probá de nuevo.' : err.message });
+  // Los errores propios (HttpError) siempre muestran su mensaje; los inesperados, uno genérico.
+  res.status(status).json({ error: err instanceof HttpError || status < 500 ? err.message : 'Algo falló en el servidor. Probá de nuevo.' });
 });
 
 // ---------- arranque ----------

@@ -148,6 +148,10 @@ const state = {
   orderFilter: 'todos',
   adminUsers: [],
   draftAppearance: null,
+  comments: { enabled: true, moderation: false, rules: '', comments: [] },
+  commentsShown: 10,
+  commentFilter: 'todos',
+  editingComment: null,
 };
 
 const isAdmin = () => state.me && state.me.role === 'admin';
@@ -182,6 +186,7 @@ async function loadSite() {
     }
   }
   renderAll();
+  loadComments();
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +381,157 @@ function renderFooter() {
   $('#footerShip').innerHTML = ship.join('');
   $('#adminLoginForm').hidden = isAdmin();
   $('#adminActive').hidden = !isAdmin();
+}
+
+// ---------------------------------------------------------------------------
+// Comentarios
+// ---------------------------------------------------------------------------
+
+async function loadComments() {
+  try {
+    state.comments = await api('GET', '/api/comments');
+  } catch {
+    state.comments = { enabled: true, moderation: false, rules: '', comments: [], error: true };
+  }
+  renderComments();
+  if ($('#adminDialog').open && state.adminTab === 'comentarios') adminComments($('#adminContent'));
+}
+
+function commentHTML(c, { admin = isAdmin(), ctx = 'p' } = {}) {
+  const editing = state.editingComment === c.id;
+  const badges = [];
+  if (c.status === 'oculto') badges.push('<span class="chip chip--hidden">Oculto</span>');
+  if (c.status === 'pendiente') badges.push(`<span class="chip chip--low">${admin ? 'Pendiente de aprobación' : 'Esperando aprobación'}</span>`);
+  if (admin && c.reports) badges.push(`<span class="chip chip--out">${c.reports} ${c.reports === 1 ? 'denuncia' : 'denuncias'}</span>`);
+  const actions = [];
+  if (admin) {
+    actions.push(`<button class="linkbtn" data-editcomment="${c.id}">Editar</button>`);
+    if (c.status === 'pendiente') actions.push(`<button class="linkbtn" data-commentstatus="${c.id}" data-to="visible">Aprobar</button>`);
+    if (c.status === 'visible') actions.push(`<button class="linkbtn" data-commentstatus="${c.id}" data-to="oculto">Ocultar</button>`);
+    if (c.status === 'oculto') actions.push(`<button class="linkbtn" data-commentstatus="${c.id}" data-to="visible">Mostrar</button>`);
+    if (c.reports) actions.push(`<button class="linkbtn" data-clearreports="${c.id}">Quitar denuncias</button>`);
+    actions.push(`<button class="linkbtn linkbtn--danger" data-deletecomment="${c.id}">Borrar</button>`);
+  } else if (c.mine) {
+    actions.push(`<button class="linkbtn linkbtn--danger" data-deletecomment="${c.id}">Borrar mi comentario</button>`);
+  } else if (state.me && c.status === 'visible') {
+    actions.push(c.reportedByMe
+      ? '<span>Denunciado</span>'
+      : `<button class="linkbtn" data-reportcomment="${c.id}">Denunciar</button>`);
+  }
+  return `<li class="comment${c.status === 'oculto' ? ' is-hidden' : ''}${c.status === 'pendiente' ? ' is-pending' : ''}" data-comment="${c.id}">
+    <span class="comment__avatar" aria-hidden="true">${esc(c.authorInitials)}</span>
+    <div class="comment__main">
+      <div class="comment__head">
+        <span class="comment__name">${esc(c.author)}</span>
+        <span class="comment__meta">${fmtDate(c.createdAt).split(',')[0]}${c.bookTitle ? ` · sobre <em>${esc(c.bookTitle)}</em>` : ''}${admin && c.authorEmail ? ` · ${esc(c.authorEmail)}` : ''}</span>
+        ${badges.join(' ')}
+      </div>
+      ${editing
+        ? `<form class="comment__edit" data-commentform="${c.id}">
+            <label class="sr" for="ce-${ctx}-${c.id}">Editar comentario</label>
+            <textarea id="ce-${ctx}-${c.id}" name="body" maxlength="1000">${esc(c.body)}</textarea>
+            <div class="form__actions form__actions--start">
+              <button class="btn btn--small" type="submit">Guardar</button>
+              <button class="btn btn--small btn--ghost" type="button" data-canceledit>Cancelar</button>
+            </div>
+          </form>`
+        : `<p class="comment__body">${esc(c.body)}</p>`}
+      <div class="comment__foot">
+        ${c.editedByAdmin ? '<span class="comment__edited">Editado por moderación</span>' : ''}
+        ${actions.join('')}
+      </div>
+    </div>
+  </li>`;
+}
+
+function renderComments() {
+  const C = state.comments;
+  const section = $('#comentarios');
+  section.hidden = !C.enabled && !isAdmin();
+  const visible = C.comments.filter((c) => c.status === 'visible');
+  $('#comNote').textContent = visible.length
+    ? `${visible.length} ${visible.length === 1 ? 'comentario' : 'comentarios'} de lectores`
+    : 'Contá qué te pareció un libro o dejale un mensaje a la autora.';
+
+  // Formulario
+  const compose = $('#comCompose');
+  const rules = C.rules ? `<p class="comments__rules">${esc(C.rules)}</p>` : '';
+  if (!C.enabled) {
+    compose.innerHTML = `<div class="comments__cta"><p>Los comentarios están cerrados por ahora.</p>${isAdmin() ? '<small class="muted">Podés abrirlos en Panel → Ajustes.</small>' : ''}</div>`;
+  } else if (!state.me) {
+    compose.innerHTML = `<div class="comments__cta">
+        <p>Para comentar necesitás una cuenta. Es la misma que se usa para comprar.</p>
+        <button class="btn btn--small" data-action="logincomment">Ingresar o crear cuenta</button>
+      </div>${rules}`;
+  } else if (!$('#commentForm')) {
+    const books = state.site.books.filter((b) => b.published);
+    compose.innerHTML = `
+      <form class="comments__form" id="commentForm" novalidate>
+        <div class="field"><label for="cmBody">Tu comentario</label>
+          <textarea id="cmBody" name="body" maxlength="1000" placeholder="Escribí lo que quieras compartir…" required></textarea></div>
+        <span class="comments__count" id="cmCount">0 / 1000</span>
+        <div class="field"><label for="cmBook">Sobre</label>
+          <select id="cmBook" name="bookId"><option value="">Comentario general</option>${books.map((b) => `<option value="${b.id}">${esc(b.title)}</option>`).join('')}</select></div>
+        <p class="form__error" role="alert"></p>
+        <div class="form__actions form__actions--start">
+          <button class="btn" type="submit">Publicar</button>
+          <span class="muted" style="font-size:.85rem">Publicás como ${esc(state.me.name)}</span>
+        </div>
+        ${C.moderation && !isAdmin() ? '<p class="hint">Los comentarios se publican después de que los revisemos.</p>' : ''}
+      </form>${rules}`;
+  }
+
+  // Lista
+  const list = $('#comList');
+  const shown = C.comments.filter((c) => isAdmin() || c.status === 'visible' || c.mine);
+  if (C.error) {
+    list.innerHTML = '<li class="comments__empty">No se pudieron cargar los comentarios. Probá recargar la página.</li>';
+  } else if (!shown.length) {
+    list.innerHTML = `<li class="comments__empty">${C.enabled ? 'Todavía no hay comentarios. Podés ser la primera persona en escribir.' : 'No hay comentarios.'}</li>`;
+  } else {
+    list.innerHTML = shown.slice(0, state.commentsShown).map((c) => commentHTML(c)).join('');
+  }
+  const rest = shown.length - state.commentsShown;
+  $('#comMore').innerHTML = rest > 0 ? `<button class="btn btn--ghost btn--small" data-action="morecomments">Ver ${Math.min(rest, 10)} comentarios más</button>` : '';
+}
+
+function adminComments(el) {
+  const all = state.comments.comments;
+  const count = (f) => all.filter(f).length;
+  const filters = {
+    todos: ['Todos', () => true],
+    denunciados: ['Denunciados', (c) => c.reports > 0],
+    pendiente: ['Pendientes', (c) => c.status === 'pendiente'],
+    oculto: ['Ocultos', (c) => c.status === 'oculto'],
+    visible: ['Visibles', (c) => c.status === 'visible'],
+  };
+  const [, fn] = filters[state.commentFilter] || filters.todos;
+  const shown = all.filter(fn);
+  el.innerHTML = `
+    <p class="panel__intro">Podés editar, ocultar o borrar los comentarios que no cumplan las normas. Un comentario editado muestra “Editado por moderación”. Las normas y la aprobación previa se configuran en Ajustes.</p>
+    <dl class="stats">
+      <div class="stat"><dt>Visibles</dt><dd>${count((c) => c.status === 'visible')}</dd></div>
+      <div class="stat"><dt>Pendientes</dt><dd>${count((c) => c.status === 'pendiente')}</dd></div>
+      <div class="stat"><dt>Con denuncias</dt><dd>${count((c) => c.reports > 0)}</dd></div>
+      <div class="stat"><dt>Ocultos</dt><dd>${count((c) => c.status === 'oculto')}</dd></div>
+    </dl>
+    <div class="filterbar" role="group" aria-label="Filtrar comentarios">
+      ${Object.entries(filters)
+        .map(([k, [label, f]]) => `<button class="filter" data-commentfilter="${k}" aria-pressed="${state.commentFilter === k}">${label}${k !== 'todos' && count(f) ? ` · ${count(f)}` : ''}</button>`)
+        .join('')}
+    </div>
+    ${shown.length ? `<ol class="comments__list">${shown.map((c) => commentHTML(c, { admin: true, ctx: 'a' })).join('')}</ol>` : '<div class="empty">No hay comentarios en esta vista.</div>'}`;
+}
+
+async function commentAction(fn, okMsg) {
+  try {
+    await fn();
+    if (okMsg) toast(okMsg);
+  } catch (err) {
+    toast(err.message, true);
+  }
+  state.editingComment = null;
+  await loadComments();
 }
 
 // ---------------------------------------------------------------------------
@@ -582,6 +738,83 @@ function emailLine(o) {
     ${e.error ? `<span class="order__mailerr">${esc(e.error)}</span>` : ''}</div>`;
 }
 
+const MP_STATUS = {
+  approved: 'aprobado',
+  pending: 'pendiente',
+  in_process: 'en revisión',
+  rejected: 'rechazado',
+  cancelled: 'cancelado',
+  refunded: 'devuelto',
+  charged_back: 'contracargo',
+};
+
+function paymentLine(o, admin) {
+  if (o.paymentMethod !== 'mercadopago') return 'Pago: transferencia';
+  let txt = 'Pago: Mercado Pago';
+  if (o.mpStatus) txt += ` · ${MP_STATUS[o.mpStatus] || esc(o.mpStatus)}`;
+  else if (o.status === 'pendiente') txt += ' · sin pagar todavía';
+  if (admin && o.mpPaymentId) txt += ` · operación ${esc(o.mpPaymentId)}`;
+  return txt;
+}
+
+async function payOrder(id, btn) {
+  setBusy(btn, true, 'Abriendo Mercado Pago…');
+  try {
+    const { payUrl } = await api('POST', `/api/orders/${id}/pay`, {});
+    window.location.href = payUrl;
+  } catch (err) {
+    setBusy(btn, false);
+    toast(err.message, true);
+  }
+}
+
+// Vuelta desde Mercado Pago: se confirma el pago consultando al servidor.
+async function handlePaymentReturn() {
+  const q = new URLSearchParams(location.search);
+  const paymentId = q.get('payment_id') || q.get('collection_id');
+  const orderId = Number(q.get('external_reference')) || null;
+  try {
+    history.replaceState(null, '', '/');
+  } catch {
+    /* sin historial */
+  }
+  const body = $('#checkoutBody');
+  body.innerHTML = '<p class="loading">Confirmando el pago con Mercado Pago…</p>';
+  openDialog('checkoutDialog');
+  let r = { status: q.get('status') || 'null', orderId };
+  if (paymentId && paymentId !== 'null') {
+    try {
+      r = await api('POST', '/api/mp/confirm', { paymentId });
+    } catch (err) {
+      body.innerHTML = `<h2 class="modal__title">No pudimos confirmar el pago</h2><p class="modal__lead">${esc(err.message)}</p>
+        <div class="form__actions form__actions--start"><button class="btn" data-action="myorders">Ver mis pedidos</button></div>`;
+      return;
+    }
+  }
+  const num = r.orderId ? orderNo(r.orderId) : '';
+  const views = {
+    approved: ['Pago aprobado', `¡Listo! Mercado Pago acreditó el pago del pedido ${num}. Te mandamos la confirmación por mail.`, false],
+    pending: ['Pago pendiente', `Mercado Pago está procesando el pago del pedido ${num}. Cuando se acredite, el pedido pasa a “pagado” solo y te avisamos por mail.`, false],
+    in_process: ['Pago en revisión', `Mercado Pago está revisando el pago del pedido ${num}. Suele resolverse en unos minutos; te avisamos por mail.`, false],
+  };
+  const [title, text, retry] = views[r.status] || [
+    'El pago no se completó',
+    `No se cobró nada. Tu pedido ${num} sigue guardado: podés intentar de nuevo con otra tarjeta o medio de pago.`,
+    true,
+  ];
+  body.innerHTML = `
+    <div class="success">
+      <p class="eyebrow">Mercado Pago</p>
+      <h2 class="modal__title">${title}</h2>
+      <p class="modal__lead" style="margin:0">${text}</p>
+      <div class="form__actions form__actions--start">
+        ${retry && r.orderId ? `<button class="btn" data-pay="${r.orderId}">Intentar pagar de nuevo</button>` : ''}
+        <button class="btn ${retry ? 'btn--ghost' : ''}" data-action="myorders">Ver mis pedidos</button>
+      </div>
+    </div>`;
+  loadSite().catch(() => {});
+}
+
 function orderCard(o, admin) {
   const ship = o.shipping || {};
   const shipText =
@@ -605,9 +838,13 @@ function orderCard(o, admin) {
     <ul class="order__items">${o.items.map((i) => `<li><span>${i.qty} × ${esc(i.title)}</span><span>${money(i.price * i.qty)}</span></li>`).join('')}
       <li class="muted"><span>Envío</span><span>${o.shippingCost ? money(o.shippingCost) : 'Sin cargo'}</span></li></ul>
     <div class="order__ship">${shipText}${o.notes ? `<br><em>Nota: ${esc(o.notes)}</em>` : ''}</div>
+    <div class="order__pay">${paymentLine(o, admin)}</div>
     ${admin ? emailLine(o) : ''}
     <div class="order__foot">
       <span class="order__total">Total ${money(o.total)}</span>
+      ${!admin && o.status === 'pendiente' && state.site.payments?.mercadopago
+        ? `<button class="btn btn--small" data-pay="${o.id}">Pagar con Mercado Pago</button>`
+        : ''}
       ${admin
         ? `<label class="check" style="gap:.5rem">Estado
             <select data-orderstatus="${o.id}" ${o.status === 'cancelado' ? 'disabled' : ''}>
@@ -727,8 +964,9 @@ function openCheckout() {
   const a = me.address || {};
   $('#checkoutBody').innerHTML = `
     <h2 class="modal__title" id="checkoutTitle">Finalizar compra</h2>
-    <p class="modal__lead">Revisá tus datos. El pago se coordina después de confirmar el pedido.</p>
+    <p class="modal__lead">Revisá tus datos y elegí cómo pagar.</p>
     <form class="form" id="checkoutForm" novalidate>
+      <span class="fieldlabel">Entrega</span>
       <div class="segmented" role="radiogroup" aria-label="Forma de entrega">
         <label><input type="radio" name="method" value="envio" checked><span>Envío a domicilio</span><small>Correo, 3 a 7 días hábiles</small></label>
         <label><input type="radio" name="method" value="retiro"><span>Retiro a coordinar</span><small>En presentaciones o talleres</small></label>
@@ -740,6 +978,13 @@ function openCheckout() {
         <div class="field form__full"><label for="coNotes">Notas (opcional)</label><textarea id="coNotes" name="notes" rows="2" style="min-height:76px" placeholder="Si querés una dedicatoria, escribí a nombre de quién."></textarea></div>
       </div>
       <label class="check"><input type="checkbox" name="saveAddress" checked> Guardar estos datos para la próxima compra</label>
+      <span class="fieldlabel">Pago</span>
+      <div class="segmented" role="radiogroup" aria-label="Forma de pago">
+        ${state.site.payments?.mercadopago
+          ? '<label><input type="radio" name="payment" value="mercadopago" checked><span>Mercado Pago</span><small>Tarjeta, débito o dinero en cuenta</small></label>'
+          : ''}
+        <label><input type="radio" name="payment" value="transferencia" ${state.site.payments?.mercadopago ? '' : 'checked'}><span>Transferencia</span><small>Te mandamos los datos por mail</small></label>
+      </div>
       <div class="totals" id="coTotals"></div>
       <p class="form__error" role="alert"></p>
       <button class="btn btn--block" type="submit">Confirmar pedido</button>
@@ -754,6 +999,8 @@ function renderCheckoutTotals() {
   const method = form.elements.method.value;
   $('#coAddress').hidden = method !== 'envio';
   const t = cartTotals(method);
+  const btn = $('#checkoutForm button[type=submit]');
+  if (btn) btn.textContent = form.elements.payment?.value === 'mercadopago' ? 'Confirmar e ir a pagar' : 'Confirmar pedido';
   $('#coTotals').innerHTML = `
     ${cartLines().map((l) => `<div><span>${l.qty} × ${esc(l.book.title)}</span><span>${money(l.book.price * l.qty)}</span></div>`).join('')}
     <div><span>Envío</span><span>${t.shipping ? money(t.shipping) : 'Sin cargo'}</span></div>
@@ -773,10 +1020,21 @@ async function submitCheckout(form) {
       phone: d.phone,
       notes: d.notes,
       saveAddress: Boolean(d.saveAddress),
+      payment: d.payment,
       address: { fullName: d.fullName, street: d.street, city: d.city, province: d.province, zip: d.zip },
     });
     state.cart = [];
     saveCart();
+    if (res.payUrl) {
+      $('#checkoutBody').innerHTML = `
+        <div class="success">
+          <p class="eyebrow">Pedido ${orderNo(res.order.id)} guardado</p>
+          <h2 class="modal__title">Te llevamos a Mercado Pago…</h2>
+          <p class="modal__lead" style="margin:0">Si no pasa nada en unos segundos, <a href="${esc(res.payUrl)}">tocá acá para pagar</a>.</p>
+        </div>`;
+      window.location.href = res.payUrl;
+      return;
+    }
     await loadSite();
     $('#checkoutBody').innerHTML = `
       <div class="success">
@@ -785,7 +1043,9 @@ async function submitCheckout(form) {
         <p class="modal__lead" style="margin:0">Total ${money(res.order.total)}. ${res.emailSent
           ? `Te mandamos la confirmación a <strong>${esc(state.me.email)}</strong>. Si no la ves en unos minutos, revisá la carpeta de spam.`
           : 'Guardá este número de pedido. También lo vas a encontrar en Mi cuenta.'}</p>
-        ${res.paymentInstructions ? `<div class="success__box">${esc(res.paymentInstructions)}</div>` : ''}
+        ${res.payError
+          ? `<div class="notice" style="margin:0">${esc(res.payError)}</div>`
+          : res.paymentInstructions ? `<div class="success__box">${esc(res.paymentInstructions)}</div>` : ''}
         <div class="form__actions form__actions--start">
           <button class="btn" data-action="myorders">Ver mis pedidos</button>
           <button class="btn btn--ghost" data-close>Seguir mirando</button>
@@ -829,6 +1089,7 @@ function renderAdmin() {
     redes: adminSocials,
     pedidos: adminOrders,
     usuarios: adminUsers,
+    comentarios: adminComments,
     apariencia: adminAppearance,
     ajustes: adminSettings,
   }[state.adminTab];
@@ -1253,6 +1514,11 @@ function adminSettings(el) {
         <div class="field"><label for="stFree">Envío gratis desde (ARS)</label><input id="stFree" name="freeShippingFrom" type="number" min="0" step="1000" value="${esc(s.freeShippingFrom)}"><small>Poné 0 para no ofrecer envío gratis.</small></div>
         <div class="field form__full"><label for="stPay">Instrucciones de pago</label><textarea id="stPay" name="paymentInstructions" rows="5">${esc(s.paymentInstructions)}</textarea><small>Se muestran al comprador cuando confirma el pedido y van en su mail de confirmación. Podés poner tu alias, CBU o link de pago.</small></div>
       </div>
+      <fieldset class="fieldset"><legend>Comentarios</legend>
+        <label class="check"><input type="checkbox" name="commentsEnabled" ${s.commentsEnabled !== false ? 'checked' : ''}> Permitir comentarios</label>
+        <label class="check"><input type="checkbox" name="commentsModeration" ${s.commentsModeration ? 'checked' : ''}> Revisar cada comentario antes de publicarlo</label>
+        <div class="field"><label for="stRules">Normas que se muestran junto al formulario</label><textarea id="stRules" name="commentRules" rows="3" style="min-height:84px">${esc(s.commentRules || '')}</textarea></div>
+      </fieldset>
       <fieldset class="fieldset"><legend>Mails de pedidos</legend>
         ${mailStatusHTML()}
         <div class="field"><label for="stNotify">Email del vendedor (avisos de pedidos)</label><input id="stNotify" name="notifyEmail" type="email" value="${esc(s.notifyEmail)}" placeholder="${esc(s.contactEmail || 'tu@email.com')}"><small>Acá te llega un mail por cada compra. Si lo dejás vacío se usa el email de contacto.</small></div>
@@ -1492,6 +1758,38 @@ document.addEventListener('click', async (e) => {
     state.orderFilter = ds.orderfilter;
     return adminOrders($('#adminContent'), false);
   }
+  if (ds.pay) return payOrder(Number(ds.pay), el);
+  if (ds.editcomment) {
+    state.editingComment = Number(ds.editcomment);
+    renderComments();
+    if ($('#adminDialog').open && state.adminTab === 'comentarios') adminComments($('#adminContent'));
+    const ta = $('#adminDialog').open ? $(`#ce-a-${ds.editcomment}`) : $(`#ce-p-${ds.editcomment}`);
+    ta?.focus();
+    return;
+  }
+  if ('canceledit' in ds) {
+    state.editingComment = null;
+    renderComments();
+    if ($('#adminDialog').open && state.adminTab === 'comentarios') adminComments($('#adminContent'));
+    return;
+  }
+  if (ds.commentstatus) {
+    const labels = { visible: 'Comentario visible.', oculto: 'Comentario oculto.' };
+    return commentAction(() => api('PUT', `/api/admin/comments/${ds.commentstatus}`, { status: ds.to }), labels[ds.to]);
+  }
+  if (ds.clearreports) return commentAction(() => api('PUT', `/api/admin/comments/${ds.clearreports}`, { clearReports: true }), 'Denuncias quitadas.');
+  if (ds.deletecomment) {
+    if (!(await confirmAction('¿Borrar este comentario? No se puede deshacer.'))) return;
+    return commentAction(() => api('DELETE', `/api/comments/${ds.deletecomment}`), 'Comentario borrado.');
+  }
+  if (ds.reportcomment) {
+    if (!(await confirmAction('¿Denunciar este comentario? La moderación lo va a revisar.', 'Denunciar'))) return;
+    return commentAction(() => api('POST', `/api/comments/${ds.reportcomment}/report`, {}), 'Gracias, lo vamos a revisar.');
+  }
+  if (ds.commentfilter) {
+    state.commentFilter = ds.commentfilter;
+    return adminComments($('#adminContent'));
+  }
   if (ds.deletebook) return deleteBook(Number(ds.deletebook));
   if (ds.sendreset) {
     const u = state.adminUsers.find((x) => x.id === Number(ds.sendreset));
@@ -1590,6 +1888,11 @@ document.addEventListener('click', async (e) => {
     case 'removephoto':
       state.pendingPhoto = '';
       return adminAuthor($('#adminContent'));
+    case 'logincomment':
+      return openAuth('login', 'Ingresá o creá tu cuenta para comentar.');
+    case 'morecomments':
+      state.commentsShown += 10;
+      return renderComments();
     case 'refreshlog':
       return loadMailLog();
     case 'resetappearance':
@@ -1631,11 +1934,12 @@ document.addEventListener('input', (e) => {
   }
   if (t.form && t.form.id === 'bookForm' && ['title', 'publisher', 'genre', 'coverColor'].includes(t.name)) renderBookPreview();
   if (t.form && t.form.id === 'appearanceForm') readAppearanceForm(t.form, t);
+  if (t.id === 'cmBody') $('#cmCount').textContent = `${t.value.length} / 1000`;
 });
 
 document.addEventListener('change', async (e) => {
   const t = e.target;
-  if (t.form && t.form.id === 'checkoutForm' && t.name === 'method') return renderCheckoutTotals();
+  if (t.form && t.form.id === 'checkoutForm' && (t.name === 'method' || t.name === 'payment')) return renderCheckoutTotals();
   if (t.form && t.form.id === 'appearanceForm' && t.name === 'custom') return readAppearanceForm(t.form, t);
   if (t.dataset.orderstatus) return changeOrderStatus(t);
   if (t.dataset.userrole) {
@@ -1678,6 +1982,12 @@ document.addEventListener('submit', async (e) => {
   const err = $('.form__error', form);
   if (err) err.textContent = '';
   const btn = $('button[type=submit]', form);
+
+  if (form.dataset.commentform) {
+    const id = form.dataset.commentform;
+    const body = formData(form).body;
+    return commentAction(() => api('PUT', `/api/admin/comments/${id}`, { body }), 'Comentario editado.');
+  }
 
   try {
     switch (form.id) {
@@ -1763,6 +2073,16 @@ document.addEventListener('submit', async (e) => {
       }
       case 'checkoutForm':
         return submitCheckout(form);
+      case 'commentForm': {
+        setBusy(btn, true, 'Publicando…');
+        const d = formData(form);
+        const { comment } = await api('POST', '/api/comments', { body: d.body, bookId: d.bookId || null });
+        form.reset();
+        $('#cmCount').textContent = '0 / 1000';
+        setBusy(btn, false);
+        toast(comment.status === 'pendiente' ? 'Recibimos tu comentario. Se publica cuando lo revisemos.' : 'Comentario publicado.');
+        return loadComments();
+      }
       case 'authorForm':
         return saveAuthor(form);
       case 'bookForm':
@@ -1810,6 +2130,7 @@ $('#confirmDialog').addEventListener('close', () => {
 loadCart();
 loadSite()
   .then(() => {
+    if (location.pathname === '/pago') handlePaymentReturn();
     if (location.pathname === '/restablecer') {
       const t = new URLSearchParams(location.search).get('t');
       if (t) openReset(t);

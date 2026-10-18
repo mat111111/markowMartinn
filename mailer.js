@@ -160,9 +160,11 @@ function buyerEmail({ order, customer, settings, siteUrl, accent }) {
     ${itemsTable(order)}
     ${shippingBlock(order)}
     ${order.notes ? `<p style="margin:0 0 6px;"><strong>Tus notas:</strong> ${esc(order.notes)}</p>` : ''}
-    ${settings.paymentInstructions
-      ? `<div style="margin:20px 0 4px;padding:14px 16px;background:#f1f3fb;border-left:3px solid ${accent};white-space:pre-line;"><strong>Cómo pagar</strong><br>${esc(settings.paymentInstructions)}</div>`
-      : ''}
+    ${order.paymentMethod === 'mercadopago'
+      ? `<div style="margin:20px 0 4px;padding:14px 16px;background:#f1f3fb;border-left:3px solid ${accent};"><strong>Pago con Mercado Pago</strong><br>Cuando Mercado Pago confirme el pago te mandamos otro mail. Si no llegaste a pagar, entrá a Mi cuenta y tocá “Pagar con Mercado Pago”.</div>`
+      : settings.paymentInstructions
+        ? `<div style="margin:20px 0 4px;padding:14px 16px;background:#f1f3fb;border-left:3px solid ${accent};white-space:pre-line;"><strong>Cómo pagar</strong><br>${esc(settings.paymentInstructions)}</div>`
+        : ''}
     ${siteUrl ? `<p style="margin:22px 0 0;"><a href="${esc(siteUrl)}" style="color:${accent};">Ver el estado en Mi cuenta</a></p>` : ''}`;
   return {
     subject: `Pedido ${orderNo(order.id)} recibido · ${siteName}`,
@@ -181,7 +183,9 @@ function sellerEmail({ order, customer, settings, siteUrl, accent }) {
   const s = order.shipping || {};
   const body = `
     <h1 style="margin:0 0 6px;font-family:Georgia,'Times New Roman',serif;font-weight:normal;font-size:28px;line-height:1.2;">Nuevo pedido ${orderNo(order.id)}</h1>
-    <p style="margin:0 0 4px;">Total <strong>${money(order.total)}</strong>. Queda <strong>pendiente de pago</strong> hasta que lo marques como pagado en el panel.</p>
+    <p style="margin:0 0 4px;">Total <strong>${money(order.total)}</strong>. ${order.paymentMethod === 'mercadopago'
+      ? 'El comprador eligió <strong>Mercado Pago</strong>: el pedido pasa a pagado solo cuando se acredite, y te llega otro mail.'
+      : 'Eligió <strong>transferencia</strong>: queda pendiente hasta que lo marques como pagado en el panel.'}</p>
     <p style="margin:16px 0 4px;"><strong>Comprador</strong><br>${esc(customer.name)}<br>${esc(customer.email)}${s.phone ? `<br>Tel. ${esc(s.phone)}` : ''}</p>
     ${itemsTable(order)}
     ${shippingBlock(order)}
@@ -196,6 +200,37 @@ function sellerEmail({ order, customer, settings, siteUrl, accent }) {
       body,
       footer: 'Respondé este mail para escribirle directamente al comprador.',
     }),
+  };
+}
+
+function paidEmail({ order, customer, settings, siteUrl, accent, forSeller }) {
+  const siteName = settings.siteName || 'Tienda';
+  const body = forSeller
+    ? `<h1 style="margin:0 0 6px;font-family:Georgia,'Times New Roman',serif;font-weight:normal;font-size:28px;line-height:1.2;">Pago acreditado · ${orderNo(order.id)}</h1>
+       <p style="margin:0 0 4px;">Mercado Pago confirmó el pago de <strong>${esc(customer.name)}</strong> (${esc(customer.email)}). El pedido ya figura como <strong>pagado</strong>: falta prepararlo y enviarlo.</p>
+       ${itemsTable(order)}${shippingBlock(order)}
+       ${order.notes ? `<p style="margin:0 0 6px;"><strong>Notas:</strong> ${esc(order.notes)}</p>` : ''}`
+    : `<h1 style="margin:0 0 6px;font-family:Georgia,'Times New Roman',serif;font-weight:normal;font-size:28px;line-height:1.2;">Recibimos tu pago</h1>
+       <p style="margin:0 0 4px;">Mercado Pago confirmó el pago de tu pedido ${orderNo(order.id)}. Ahora lo preparamos y te avisamos cuando salga.</p>
+       ${itemsTable(order)}${shippingBlock(order)}
+       ${siteUrl ? `<p style="margin:22px 0 0;"><a href="${esc(siteUrl)}" style="color:${accent};">Ver el estado en Mi cuenta</a></p>` : ''}`;
+  return {
+    subject: forSeller ? `Pago acreditado · pedido ${orderNo(order.id)} · ${money(order.total)}` : `Pago recibido · pedido ${orderNo(order.id)} · ${siteName}`,
+    html: layout({ siteName, accent, preheader: `Pago de ${money(order.total)} acreditado.`, body, footer: `Mail automático de ${esc(siteName)}.` }),
+  };
+}
+
+function commentPendingEmail({ comment, settings, siteUrl, accent }) {
+  const siteName = settings.siteName || 'Tienda';
+  const body = `
+    <h1 style="margin:0 0 8px;font-family:Georgia,'Times New Roman',serif;font-weight:normal;font-size:26px;line-height:1.2;">Comentario para aprobar</h1>
+    <p style="margin:0 0 10px;"><strong>${esc(comment.author_name || '')}</strong>${comment.book_title ? ` sobre <em>${esc(comment.book_title)}</em>` : ''} escribió:</p>
+    <blockquote style="margin:0 0 14px;padding:12px 16px;background:#f3f4f1;border-left:3px solid ${accent};white-space:pre-line;">${esc(comment.body)}</blockquote>
+    <p style="margin:0;">No se muestra hasta que lo apruebes en el panel → Comentarios.</p>
+    ${siteUrl ? button(siteUrl, 'Abrir el sitio', accent) : ''}`;
+  return {
+    subject: `Nuevo comentario para aprobar · ${siteName}`,
+    html: layout({ siteName, accent, preheader: String(comment.body).slice(0, 90), body, footer: `Mail automático de ${esc(siteName)}.` }),
   };
 }
 
@@ -255,4 +290,4 @@ function passwordChangedEmail({ user, settings, siteUrl, accent }) {
   };
 }
 
-module.exports = { sendMail, setLogger, mailStatus, buyerEmail, sellerEmail, testEmail, resetEmail, passwordChangedEmail };
+module.exports = { sendMail, setLogger, mailStatus, buyerEmail, sellerEmail, testEmail, paidEmail, commentPendingEmail, resetEmail, passwordChangedEmail };

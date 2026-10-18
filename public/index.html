@@ -36,6 +36,7 @@
         <a href="#obra">Obra</a>
         <a href="#biografia">Biografía</a>
         <a href="#lecturas">Lecturas</a>
+        <a href="#comentarios">Comentarios</a>
         <a href="#redes">Redes</a>
       </nav>
       <div class="masthead__actions">
@@ -103,7 +104,24 @@
       </div>
     </section>
 
-    <section class="section section--band" id="redes" aria-labelledby="socialTitle">
+    <section class="section section--band" id="comentarios" aria-labelledby="comTitle">
+      <div class="wrap">
+        <div class="section__head">
+          <h2 class="section__title" id="comTitle">Comentarios</h2>
+          <p class="section__note" id="comNote"></p>
+          <button class="editbtn" data-panel="comentarios" hidden>Moderar comentarios</button>
+        </div>
+        <div class="comments">
+          <div class="comments__compose" id="comCompose"></div>
+          <div class="comments__feed">
+            <ol class="comments__list" id="comList"></ol>
+            <div class="comments__more" id="comMore"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="redes" aria-labelledby="socialTitle">
       <div class="wrap">
         <div class="section__head">
           <h2 class="section__title" id="socialTitle">Redes y contacto</h2>
@@ -249,6 +267,7 @@
       <button class="tab" role="tab" data-admintab="recomendaciones">Lecturas</button>
       <button class="tab" role="tab" data-admintab="redes">Redes</button>
       <button class="tab" role="tab" data-admintab="pedidos">Pedidos</button>
+      <button class="tab" role="tab" data-admintab="comentarios">Comentarios</button>
       <button class="tab" role="tab" data-admintab="usuarios">Usuarios</button>
       <button class="tab" role="tab" data-admintab="apariencia">Apariencia</button>
       <button class="tab" role="tab" data-admintab="ajustes">Ajustes</button>

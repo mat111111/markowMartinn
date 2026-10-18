@@ -9,6 +9,8 @@ Sitio para un escritor o escritora con biografía, libros a la venta, lecturas r
 - Biografía con foto, datos breves y cita.
 - Lecturas recomendadas y redes sociales.
 - Carrito, creación de cuenta, checkout con envío o retiro, e historial de pedidos en "Mi cuenta".
+- Pago con **Mercado Pago** (tarjeta, débito o dinero en cuenta) o por transferencia. Si un pago falla, se puede reintentar desde "Mi cuenta".
+- **Comentarios** públicos: cualquier usuario registrado puede comentar (en general o sobre un libro), borrar los suyos y denunciar los de otros.
 - **¿Olvidaste tu contraseña o tu email?**: llega un mail con el usuario (email de la cuenta) y un link para crear una contraseña nueva. El link sirve una sola vez y vence en una hora. Después del cambio llega un aviso de seguridad.
 
 **Para el administrador** (login al pie de la página)
@@ -16,6 +18,7 @@ Sitio para un escritor o escritora con biografía, libros a la venta, lecturas r
 - Crear, editar, ocultar, destacar y borrar libros; subir tapas o usar tapas tipográficas de color.
 - Editar lecturas recomendadas y redes (con orden).
 - Ver pedidos y cambiar su estado (pendiente, pagado, enviado, entregado, cancelado). Cancelar devuelve el stock.
+- Moderar comentarios: editar (queda marcado "Editado por moderación"), ocultar, aprobar, borrar y ver denuncias. Opcional: revisar cada comentario antes de publicarlo.
 - Ver usuarios, crear cuentas, dar o quitar el rol de administrador y enviarle a cualquier usuario el link para crear una contraseña nueva.
 - Apariencia: tamaño de letra (85 % a 130 %), color de letras, fondo y acento, con paletas listas, vista previa en vivo y aviso si el contraste es bajo.
 - Ajustes: nombre del sitio, email de contacto, email del vendedor para avisos, costo de envío, envío gratis desde cierto monto e instrucciones de pago.
@@ -25,7 +28,7 @@ Sitio para un escritor o escritora con biografía, libros a la venta, lecturas r
 - Cada pedido muestra en el panel si los mails salieron bien, y tiene un botón para reenviarlos.
 - En Ajustes hay un botón para mandar un mail de prueba.
 
-> El sitio **no cobra en línea**: el comprador confirma el pedido y ve tus instrucciones de pago (alias, CBU o link de Mercado Pago). Vos marcás el pedido como pagado desde el panel.
+> Con **Mercado Pago**, el pedido pasa a "pagado" solo cuando Mercado Pago confirma el pago. Con **transferencia**, el comprador ve tus instrucciones de pago y vos marcás el pedido como pagado desde el panel.
 
 ## Correrlo en tu computadora
 
@@ -87,6 +90,31 @@ Render borra el disco en cada deploy, así que en producción se usa PostgreSQL.
      - `BREVO_API_KEY`, `MAIL_FROM` y las demás de la sección de mails
 4. Deploy. Con `DATABASE_URL` definida el servidor usa PostgreSQL automáticamente y crea las tablas solo.
 
+## Configurar Mercado Pago
+
+El sitio usa **Checkout Pro**: el comprador confirma el pedido, va a la página de Mercado Pago, paga y vuelve al sitio. El pago se verifica siempre consultando la API de Mercado Pago con tu Access Token, así que nadie puede marcar un pedido como pagado modificando la URL.
+
+1. Entrá a [Mercado Pago Developers](https://www.mercadopago.com.ar/developers) con tu cuenta y creá una **aplicación** (tipo de pago: pagos online, producto: Checkout Pro).
+2. En la aplicación, abrí **Credenciales**:
+   - Para probar: copiá el **Access Token de prueba** y usá las tarjetas de prueba de la documentación de Mercado Pago (no se cobra nada).
+   - Para cobrar de verdad: activá las credenciales de producción y copiá ese **Access Token**.
+3. En Render → tu Web Service → **Environment**, agregá `MP_ACCESS_TOKEN` con ese token y guardá con deploy.
+4. En el panel → **Ajustes** vas a ver si está en modo prueba o producción. En el checkout aparece la opción "Mercado Pago".
+
+Detalles:
+- Mercado Pago **no acepta `localhost`** para volver al sitio ni para avisar pagos. Probalo en Render (https). En tu PC podés simular todo el circuito con `MP_MOCK=1 npm start`: aparece una pantalla falsa con "Aprobar pago" y "Rechazar pago".
+- El sitio recibe avisos automáticos en `/api/mp/webhook`, así un pago que se acredita más tarde (por ejemplo, en efectivo) igual marca el pedido como pagado.
+- Al acreditarse el pago llega un mail al comprador ("Pago recibido") y otro a vos ("Pago acreditado").
+- Si un pago se aprueba para un pedido que ya cancelaste, el pedido no cambia y queda un aviso en los logs: tenés que devolver el dinero desde Mercado Pago.
+- Los pedidos sin pagar reservan el stock. Si no se pagan, cancelalos desde el panel y el stock vuelve.
+
+## Comentarios
+
+- Se ven en la sección **Comentarios** de la portada. Para comentar hay que tener cuenta (la misma de compras).
+- Límite: un comentario cada 30 segundos y 20 por día por usuario, de hasta 1000 caracteres.
+- En **Ajustes → Comentarios** podés cerrarlos, activar la **revisión previa** (no se publican hasta que los aprobás, y te llega un mail por cada uno) y escribir las **normas** que se muestran junto al formulario.
+- En **Panel → Comentarios** filtrás por denunciados, pendientes u ocultos. Como admin también ves los botones de moderación directamente en la página.
+
 ## Recuperar contraseñas
 
 Las contraseñas se guardan con `scrypt` (un hash de un solo sentido): **nadie puede leerlas, ni siquiera el administrador**, así que el sitio nunca las envía por mail. En su lugar manda:
@@ -110,6 +138,7 @@ Necesita los mails configurados (ver arriba). Si no lo están, el formulario le 
 server.js      API (Express): cuentas, libros, pedidos, contenido y administración
 db.js          SQLite en local, PostgreSQL si existe DATABASE_URL (con migraciones)
 mailer.js      envío de mails (Brevo, SMTP o consola) y plantillas de los mails
+payments.js    Mercado Pago (Checkout Pro) por API REST, con modo simulado
 seed.js        contenido de ejemplo inicial
 public/
   index.html   estructura de la página
@@ -135,7 +164,12 @@ public/
 | POST | `/api/auth/forgot` | Pedir el mail de recuperación |
 | GET / POST | `/api/auth/reset` | Validar el link y guardar la contraseña nueva |
 | GET / PUT | `/api/me`, `/api/me/password`, `/api/me/orders` | Datos y pedidos propios |
-| POST | `/api/orders` | Crear pedido |
+| POST | `/api/orders` | Crear pedido (con `payment: "mercadopago"` devuelve el link de pago) |
+| POST | `/api/orders/:id/pay` | Pagar o reintentar con Mercado Pago un pedido pendiente propio |
+| POST | `/api/mp/confirm` · `/api/mp/webhook` | Verificar pagos con la API de Mercado Pago |
+| GET / POST / DELETE | `/api/comments[/:id]` | Ver, publicar y borrar comentarios |
+| POST | `/api/comments/:id/report` | Denunciar un comentario |
+| PUT | `/api/admin/comments/:id` | Editar, ocultar, aprobar o quitar denuncias |
 | PUT | `/api/admin/content/:key` | `settings`, `author`, `socials`, `recommendations`, `appearance` |
 | POST / PUT / DELETE | `/api/admin/books[/:id]` | Libros |
 | GET / PUT | `/api/admin/orders[/:id]` | Pedidos y estados |

@@ -64,6 +64,23 @@ CREATE TABLE IF NOT EXISTS password_resets (
   used INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  book_id INTEGER,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'visible',
+  edited_by_admin INTEGER NOT NULL DEFAULT 0,
+  reports INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS comment_reports (
+  comment_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (comment_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS content (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -95,6 +112,9 @@ async function init() {
   }
   // Migraciones: columnas agregadas en versiones posteriores.
   await addColumn('orders', 'email_status', "TEXT NOT NULL DEFAULT ''");
+  await addColumn('orders', 'payment_method', "TEXT NOT NULL DEFAULT 'transferencia'");
+  await addColumn('orders', 'mp_payment_id', "TEXT NOT NULL DEFAULT ''");
+  await addColumn('orders', 'mp_status', "TEXT NOT NULL DEFAULT ''");
 }
 
 async function addColumn(table, column, definition) {
