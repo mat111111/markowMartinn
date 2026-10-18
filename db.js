@@ -86,6 +86,17 @@ async function init() {
     sqlite.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     sqlite.exec(SCHEMA_SQLITE);
   }
+  // Migraciones: columnas agregadas en versiones posteriores.
+  await addColumn('orders', 'email_status', "TEXT NOT NULL DEFAULT ''");
+}
+
+async function addColumn(table, column, definition) {
+  try {
+    if (usePg) await pgPool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${definition}`);
+    else sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  } catch (err) {
+    if (!/duplicate column/i.test(err.message)) throw err;
+  }
 }
 
 // Devuelve filas (SELECT o sentencias con RETURNING).

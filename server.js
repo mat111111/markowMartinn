@@ -4,8 +4,11 @@
 const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 const db = require('./db');
 const seed = require('./seed');
+const mailer = require('./mailer');
+const theme = require('./public/theme.js');
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@sitio.local').toLowerCase();
@@ -13,7 +16,7 @@ const DEFAULT_ADMIN_PASSWORD = 'admin12345';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
 const SESSION_DAYS = 30;
 const ORDER_STATUSES = ['pendiente', 'pagado', 'enviado', 'entregado', 'cancelado'];
-const CONTENT_KEYS = ['settings', 'author', 'socials', 'recommendations'];
+const CONTENT_KEYS = ['settings', 'author', 'socials', 'recommendations', 'appearance'];
 
 const app = express();
 app.set('trust proxy', 1);
@@ -252,8 +255,10 @@ app.get(
       },
       socials: (await getContent('socials')) || [],
       recommendations: (await getContent('recommendations')) || [],
+      appearance: theme.normalize(await getContent('appearance')),
       books: books.map(bookOut),
       me: publicUser(req.user),
+      ...(isAdmin ? { mail: mailer.mailStatus() } : {}),
     });
   })
 );
@@ -415,6 +420,7 @@ function orderOut(o) {
     shipping: parseJson(o.shipping, {}),
     notes: o.notes,
     createdAt: o.created_at,
+    emailStatus: parseJson(o.email_status || '', null),
     customer: o.customer_name ? { name: o.customer_name, email: o.customer_email, phone: o.customer_phone } : undefined,
   };
 }
@@ -507,14 +513,78 @@ app.post(
     }
 
     const order = await db.get('SELECT * FROM orders WHERE id = ?', [row.id]);
-    res.status(201).json({ order: orderOut(order), paymentInstructions: settings.paymentInstructions || '' });
+    const mail = mailer.mailStatus();
+    res.status(201).json({
+      order: orderOut(order),
+      paymentInstructions: settings.paymentInstructions || '',
+      emailSent: mail.configured,
+    });
+    // Los mails salen después de responder, así el comprador no espera.
+    notifyOrder(order, siteUrl(req)).catch((err) => console.error('Mails del pedido', order.id, err));
   })
 );
+
+// ---------- mails de pedidos ----------
+
+function siteUrl(req) {
+  return (process.env.SITE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+}
+
+async function emailAccent() {
+  const a = theme.normalize(await getContent('appearance'));
+  return a.custom && theme.contrast(a.accentColor, '#ffffff') >= 3 ? a.accentColor : '#2539c2';
+}
+
+async function notifyOrder(orderRow, url) {
+  const order = orderOut(orderRow);
+  const customer = await db.get('SELECT name, email FROM users WHERE id = ?', [orderRow.user_id]);
+  const settings = (await getContent('settings')) || {};
+  const accent = await emailAccent();
+  const seller = settings.notifyEmail || settings.contactEmail || '';
+  const st = mailer.mailStatus();
+  const result = { at: now(), buyer: 'off', seller: 'off', error: '' };
+  const errors = [];
+
+  if (!st.configured) {
+    errors.push(st.problem || 'El envío de mails no está configurado en el servidor.');
+  } else {
+    const ctx = { order, customer: customer || { name: '', email: '' }, settings, siteUrl: url, accent };
+    if (customer) {
+      try {
+        await mailer.sendMail({ to: customer.email, toName: customer.name, replyTo: seller || undefined, fromName: settings.siteName, ...mailer.buyerEmail(ctx) });
+        result.buyer = 'ok';
+      } catch (err) {
+        result.buyer = 'error';
+        errors.push(`Comprador: ${err.message}`);
+      }
+    }
+    if (seller) {
+      try {
+        await mailer.sendMail({ to: seller, replyTo: customer ? customer.email : undefined, fromName: settings.siteName, ...mailer.sellerEmail(ctx) });
+        result.seller = 'ok';
+      } catch (err) {
+        result.seller = 'error';
+        errors.push(`Vendedor: ${err.message}`);
+      }
+    } else {
+      errors.push('Falta el email para avisos de pedidos en Ajustes.');
+    }
+  }
+  result.error = errors.join(' · ');
+  await db.run('UPDATE orders SET email_status = ? WHERE id = ?', [JSON.stringify(result), orderRow.id]);
+  return result;
+}
 
 // ---------- administración ----------
 
 const admin = express.Router();
 admin.use(requireAdmin);
+
+function optionalEmail(v, label) {
+  const e = str(v, 160, { field: label.toLowerCase() }).toLowerCase();
+  if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new HttpError(400, `${label} no tiene un formato válido.`);
+  return e;
+}
 
 function validateContent(key, body) {
   if (key === 'settings') {
@@ -523,9 +593,19 @@ function validateContent(key, body) {
       currency: 'ARS',
       shippingCost: int(body.shippingCost, 0, 10_000_000, 'El costo de envío') ?? 0,
       freeShippingFrom: int(body.freeShippingFrom, 0, 100_000_000, 'El mínimo para envío gratis') ?? 0,
-      contactEmail: str(body.contactEmail, 160, { field: 'el email de contacto' }),
+      contactEmail: optionalEmail(body.contactEmail, 'El email de contacto'),
+      notifyEmail: optionalEmail(body.notifyEmail, 'El email para avisos de pedidos'),
       paymentInstructions: str(body.paymentInstructions, 1500, { field: 'las instrucciones de pago' }),
     };
+  }
+  if (key === 'appearance') {
+    const a = theme.normalize(body);
+    const scale = Number(body.fontScale);
+    if (!(scale >= 85 && scale <= 130)) throw new HttpError(400, 'El tamaño de letra tiene que estar entre 85% y 130%.');
+    for (const k of ['textColor', 'bgColor', 'accentColor']) {
+      if (body[k] && !/^#[0-9a-fA-F]{6}$/.test(body[k])) throw new HttpError(400, 'Los colores tienen que tener el formato #RRGGBB.');
+    }
+    return a;
   }
   if (key === 'author') {
     const facts = (Array.isArray(body.facts) ? body.facts : []).slice(0, 6).map((f) => ({
@@ -677,6 +757,30 @@ admin.put(
   })
 );
 
+admin.post(
+  '/orders/:id/resend',
+  wrap(async (req, res) => {
+    const order = await db.get('SELECT * FROM orders WHERE id = ?', [Number(req.params.id)]);
+    if (!order) throw new HttpError(404, 'Ese pedido no existe.');
+    const result = await notifyOrder(order, siteUrl(req));
+    res.json({ emailStatus: result });
+  })
+);
+
+admin.post(
+  '/test-email',
+  wrap(async (req, res) => {
+    const settings = (await getContent('settings')) || {};
+    const to = (req.body.to ? validEmail(req.body.to) : '') || settings.notifyEmail || settings.contactEmail || req.user.email;
+    try {
+      await mailer.sendMail({ to, fromName: settings.siteName, ...mailer.testEmail({ settings, accent: await emailAccent() }) });
+    } catch (err) {
+      throw new HttpError(502, `No se pudo enviar: ${err.message}`);
+    }
+    res.json({ ok: true, to });
+  })
+);
+
 admin.get(
   '/users',
   wrap(async (req, res) => {
@@ -748,8 +852,22 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'No encontrado.' }))
 
 // ---------- estáticos ----------
 
-app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'], maxAge: '1h' }));
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+// La página principal se sirve con la apariencia guardada ya aplicada (sin parpadeo).
+const INDEX_HTML = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+const escHtml = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const sendIndex = wrap(async (req, res) => {
+  const settings = (await getContent('settings')) || {};
+  const css = theme.css(await getContent('appearance'));
+  let html = INDEX_HTML.replace('<style id="appearanceStyle"></style>', `<style id="appearanceStyle">${css}</style>`);
+  if (settings.siteName) html = html.replace(/<title>[^<]*<\/title>/, `<title>${escHtml(settings.siteName)}</title>`);
+  res.setHeader('Cache-Control', 'no-cache');
+  res.type('html').send(html);
+});
+
+app.get(['/', '/index.html'], sendIndex);
+app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '1h' }));
+app.get('*', sendIndex);
 
 // ---------- errores ----------
 

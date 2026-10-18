@@ -147,6 +147,7 @@ const state = {
   adminOrders: [],
   orderFilter: 'todos',
   adminUsers: [],
+  draftAppearance: null,
 };
 
 const isAdmin = () => state.me && state.me.role === 'admin';
@@ -209,6 +210,7 @@ function stockChip(b) {
 
 function renderAll() {
   const { author, settings } = state.site;
+  applyAppearance(state.draftAppearance || state.site.appearance);
   document.title = settings.siteName || author.name || 'Sitio';
   $('#wordmark').textContent = settings.siteName || author.name;
   document.body.classList.toggle('is-admin', isAdmin());
@@ -224,6 +226,11 @@ function renderAll() {
   renderFooter();
   renderCartCount();
   if ($('#adminDialog').open) renderAdmin();
+}
+
+function applyAppearance(a) {
+  const tag = $('#appearanceStyle');
+  if (tag && window.SiteTheme) tag.textContent = SiteTheme.css(a);
 }
 
 function renderHeader() {
@@ -524,6 +531,16 @@ function addressFields(a = {}, p) {
   </div>`;
 }
 
+function emailLine(o) {
+  const e = o.emailStatus;
+  const btn = `<button class="linkbtn" data-resend="${o.id}">${e ? 'Reenviar mails' : 'Enviar mails'}</button>`;
+  if (!e) return `<div class="order__mail">Mails: enviando o sin registro. ${btn}</div>`;
+  const mark = (v) => (v === 'ok' ? '✓ enviado' : v === 'error' ? '✕ falló' : '— no enviado');
+  return `<div class="order__mail${e.error ? ' order__mail--err' : ''}">
+    <span>Mail al comprador: ${mark(e.buyer)}</span><span>Mail al vendedor: ${mark(e.seller)}</span>${btn}
+    ${e.error ? `<span class="order__mailerr">${esc(e.error)}</span>` : ''}</div>`;
+}
+
 function orderCard(o, admin) {
   const ship = o.shipping || {};
   const shipText =
@@ -547,6 +564,7 @@ function orderCard(o, admin) {
     <ul class="order__items">${o.items.map((i) => `<li><span>${i.qty} × ${esc(i.title)}</span><span>${money(i.price * i.qty)}</span></li>`).join('')}
       <li class="muted"><span>Envío</span><span>${o.shippingCost ? money(o.shippingCost) : 'Sin cargo'}</span></li></ul>
     <div class="order__ship">${shipText}${o.notes ? `<br><em>Nota: ${esc(o.notes)}</em>` : ''}</div>
+    ${admin ? emailLine(o) : ''}
     <div class="order__foot">
       <span class="order__total">Total ${money(o.total)}</span>
       ${admin
@@ -723,7 +741,9 @@ async function submitCheckout(form) {
       <div class="success">
         <p class="eyebrow">Pedido recibido</p>
         <span class="success__num">${orderNo(res.order.id)}</span>
-        <p class="modal__lead" style="margin:0">Total ${money(res.order.total)}. Te escribimos a <strong>${esc(state.me.email)}</strong>.</p>
+        <p class="modal__lead" style="margin:0">Total ${money(res.order.total)}. ${res.emailSent
+          ? `Te mandamos la confirmación a <strong>${esc(state.me.email)}</strong>. Si no la ves en unos minutos, revisá la carpeta de spam.`
+          : 'Guardá este número de pedido. También lo vas a encontrar en Mi cuenta.'}</p>
         ${res.paymentInstructions ? `<div class="success__box">${esc(res.paymentInstructions)}</div>` : ''}
         <div class="form__actions form__actions--start">
           <button class="btn" data-action="myorders">Ver mis pedidos</button>
@@ -750,6 +770,7 @@ function openAdmin(tab, bookId) {
   state.pendingPhoto = null;
   state.draftRecs = null;
   state.draftSocials = null;
+  discardAppearance();
   openDialog('adminDialog');
   renderAdmin();
 }
@@ -767,6 +788,7 @@ function renderAdmin() {
     redes: adminSocials,
     pedidos: adminOrders,
     usuarios: adminUsers,
+    apariencia: adminAppearance,
     ajustes: adminSettings,
   }[state.adminTab];
   body.innerHTML = notice + '<div id="adminContent"></div>';
@@ -1185,11 +1207,138 @@ function adminSettings(el) {
         <div class="field"><label for="stMail">Email de contacto</label><input id="stMail" name="contactEmail" type="email" value="${esc(s.contactEmail)}"></div>
         <div class="field"><label for="stShip">Costo de envío (ARS)</label><input id="stShip" name="shippingCost" type="number" min="0" step="100" value="${esc(s.shippingCost)}"><small>Poné 0 si el envío es siempre gratis.</small></div>
         <div class="field"><label for="stFree">Envío gratis desde (ARS)</label><input id="stFree" name="freeShippingFrom" type="number" min="0" step="1000" value="${esc(s.freeShippingFrom)}"><small>Poné 0 para no ofrecer envío gratis.</small></div>
-        <div class="field form__full"><label for="stPay">Instrucciones de pago</label><textarea id="stPay" name="paymentInstructions" rows="5">${esc(s.paymentInstructions)}</textarea><small>Se muestran al comprador cuando confirma el pedido. Podés poner tu alias, CBU o link de pago.</small></div>
+        <div class="field form__full"><label for="stPay">Instrucciones de pago</label><textarea id="stPay" name="paymentInstructions" rows="5">${esc(s.paymentInstructions)}</textarea><small>Se muestran al comprador cuando confirma el pedido y van en su mail de confirmación. Podés poner tu alias, CBU o link de pago.</small></div>
       </div>
+      <fieldset class="fieldset"><legend>Mails de pedidos</legend>
+        ${mailStatusHTML()}
+        <div class="field"><label for="stNotify">Email del vendedor (avisos de pedidos)</label><input id="stNotify" name="notifyEmail" type="email" value="${esc(s.notifyEmail)}" placeholder="${esc(s.contactEmail || 'tu@email.com')}"><small>Acá te llega un mail por cada compra. Si lo dejás vacío se usa el email de contacto.</small></div>
+        <div class="form__actions form__actions--start">
+          <button type="button" class="btn btn--small btn--ghost" data-action="testemail" ${state.site.mail?.configured ? '' : 'disabled'}>Enviar mail de prueba</button>
+          <span class="muted" id="testEmailResult" style="font-size:.85rem"></span>
+        </div>
+      </fieldset>
       <p class="form__error" role="alert"></p>
       <div class="form__actions"><button class="btn" type="submit">Guardar ajustes</button></div>
     </form>`;
+}
+
+function mailStatusHTML() {
+  const m = state.site.mail || {};
+  const names = { brevo: 'Brevo', smtp: 'SMTP', consola: 'modo prueba (se muestran en la consola del servidor)' };
+  if (m.configured) {
+    return `<div class="mailstatus mailstatus--ok"><strong>Mails activos.</strong> Se envían con ${esc(names[m.provider] || m.provider)}${m.from ? ` desde <strong>${esc(m.from)}</strong>` : ''}. Cada pedido manda una confirmación al comprador y un aviso al vendedor.</div>`;
+  }
+  return `<div class="mailstatus mailstatus--off"><strong>Mails desactivados.</strong> ${esc(m.problem || 'Falta configurar BREVO_API_KEY y MAIL_FROM en el servidor (ver README).')} Los pedidos se registran igual.</div>`;
+}
+
+// --- Apariencia ---
+function colorField(key, label, value) {
+  return `<div class="field">
+    <label for="ap-${key}">${label}</label>
+    <div class="colorpick">
+      <input type="color" id="ap-${key}" name="${key}" value="${esc(value)}">
+      <input type="text" name="${key}Hex" value="${esc(value)}" maxlength="7" spellcheck="false" autocomplete="off" aria-label="${label} en código hexadecimal">
+    </div>
+  </div>`;
+}
+
+function presetActive(p, a) {
+  if (!p.custom) return !a.custom;
+  return a.custom && p.textColor === a.textColor && p.bgColor === a.bgColor && p.accentColor === a.accentColor;
+}
+
+function swatchesHTML(a) {
+  const D = SiteTheme.DEFAULTS;
+  return SiteTheme.PRESETS.map((p) => {
+    const text = p.custom ? p.textColor : D.textColor;
+    const bg = p.custom ? p.bgColor : D.bgColor;
+    const accent = p.custom ? p.accentColor : D.accentColor;
+    return `<button type="button" class="swatch" data-preset="${p.id}" aria-pressed="${presetActive(p, a)}">
+      <span class="swatch__chip" style="background:${bg};color:${text}">Aa<i style="background:${accent}"></i></span>
+      <span class="swatch__name">${esc(p.name)}</span></button>`;
+  }).join('');
+}
+
+function warningsHTML(a) {
+  const w = SiteTheme.warnings(a);
+  return w.length ? `<div class="notice" style="margin:0">${w.map(esc).join('<br>')}</div>` : '';
+}
+
+function adminAppearance(el) {
+  if (!state.draftAppearance) state.draftAppearance = { ...state.site.appearance };
+  const a = state.draftAppearance;
+  applyAppearance(a);
+  el.innerHTML = `
+    <p class="panel__intro">Lo que cambies se ve en vivo en la página de atrás. Se aplica a todos los visitantes recién cuando guardás.</p>
+    <form class="form" id="appearanceForm" novalidate>
+      <fieldset class="fieldset fieldset--first"><legend>Tamaño de letra</legend>
+        <div class="scale">
+          <span class="scale__a scale__a--sm" aria-hidden="true">A</span>
+          <input type="range" id="apScale" name="fontScale" min="85" max="130" step="5" value="${a.fontScale}" aria-label="Tamaño de letra">
+          <span class="scale__a scale__a--lg" aria-hidden="true">A</span>
+          <output id="apScaleVal" for="apScale">${a.fontScale}%</output>
+        </div>
+        <small class="muted">100% es el tamaño original. Agranda o achica los textos de todo el sitio.</small>
+      </fieldset>
+      <fieldset class="fieldset"><legend>Paletas listas</legend>
+        <div class="swatches" id="apSwatches">${swatchesHTML(a)}</div>
+        <small class="muted">“Original” usa el diseño de fábrica, que cambia solo a modo oscuro según la configuración de cada visitante.</small>
+      </fieldset>
+      <fieldset class="fieldset"><legend>Colores</legend>
+        <label class="check"><input type="checkbox" name="custom" ${a.custom ? 'checked' : ''}> Usar estos colores en todo el sitio</label>
+        <div class="colors" id="apColors" ${a.custom ? '' : 'data-off'}>
+          ${colorField('textColor', 'Letras', a.textColor)}
+          ${colorField('bgColor', 'Fondo', a.bgColor)}
+          ${colorField('accentColor', 'Acento (botones y enlaces)', a.accentColor)}
+        </div>
+        <div id="apWarnings">${warningsHTML(a)}</div>
+      </fieldset>
+      <p class="form__error" role="alert"></p>
+      <div class="form__actions" style="justify-content:space-between">
+        <button type="button" class="linkbtn" data-action="resetappearance">Volver al diseño original</button>
+        <div class="form__actions" style="padding:0">
+          <button type="button" class="btn btn--ghost" data-action="discardappearance">Descartar</button>
+          <button class="btn" type="submit">Guardar apariencia</button>
+        </div>
+      </div>
+    </form>`;
+}
+
+function readAppearanceForm(form, source) {
+  const a = state.draftAppearance;
+  const f = form.elements;
+  a.fontScale = Number(f.fontScale.value);
+  a.custom = f.custom.checked;
+  const isHex = (v) => /^#[0-9a-f]{6}$/i.test(v);
+  for (const k of ['textColor', 'bgColor', 'accentColor']) {
+    if (source && source.name === k + 'Hex') {
+      let v = source.value.trim();
+      if (v && v[0] !== '#') v = '#' + v;
+      if (isHex(v)) {
+        a[k] = v.toLowerCase();
+        f[k].value = a[k];
+      }
+    } else {
+      a[k] = f[k].value.toLowerCase();
+      if (f[k + 'Hex'] !== source) f[k + 'Hex'].value = a[k];
+    }
+  }
+  // Tocar un color activa los colores personalizados.
+  if (source && /Color/.test(source.name) && !a.custom) {
+    a.custom = true;
+    f.custom.checked = true;
+  }
+  $('#apScaleVal').textContent = a.fontScale + '%';
+  $('#apColors').toggleAttribute('data-off', !a.custom);
+  $('#apSwatches').innerHTML = swatchesHTML(a);
+  $('#apWarnings').innerHTML = warningsHTML(a);
+  applyAppearance(a);
+}
+
+function discardAppearance() {
+  if (!state.draftAppearance) return;
+  state.draftAppearance = null;
+  applyAppearance(state.site.appearance);
 }
 
 async function adminSave(form, fn, okMsg, rerender = true) {
@@ -1262,6 +1411,7 @@ document.addEventListener('click', async (e) => {
     return renderAccount();
   }
   if (ds.admintab) {
+    discardAppearance();
     state.adminTab = ds.admintab;
     state.editingBook = null;
     state.pendingCover = null;
@@ -1307,6 +1457,28 @@ document.addEventListener('click', async (e) => {
     return drafts[ds.remove].render($('#adminContent'));
   }
   if (ds.saverepeat) return saveRepeat(ds.saverepeat, el);
+  if (ds.preset) {
+    const p = SiteTheme.PRESETS.find((x) => x.id === ds.preset);
+    const a = state.draftAppearance;
+    if (!p || !a) return;
+    if (p.custom) Object.assign(a, { custom: true, textColor: p.textColor, bgColor: p.bgColor, accentColor: p.accentColor });
+    else Object.assign(a, { custom: false, textColor: SiteTheme.DEFAULTS.textColor, bgColor: SiteTheme.DEFAULTS.bgColor, accentColor: SiteTheme.DEFAULTS.accentColor });
+    return adminAppearance($('#adminContent'));
+  }
+  if (ds.resend) {
+    setBusy(el, true, 'Enviando…');
+    try {
+      const { emailStatus } = await api('POST', `/api/admin/orders/${ds.resend}/resend`, {});
+      const o = state.adminOrders.find((x) => x.id === Number(ds.resend));
+      if (o) o.emailStatus = emailStatus;
+      toast(emailStatus.error ? 'No se pudieron enviar todos los mails.' : 'Mails enviados.', Boolean(emailStatus.error));
+      adminOrders($('#adminContent'), false);
+    } catch (err) {
+      setBusy(el, false);
+      toast(err.message, true);
+    }
+    return;
+  }
 
   switch (ds.action) {
     case 'logout':
@@ -1330,6 +1502,26 @@ document.addEventListener('click', async (e) => {
     case 'removephoto':
       state.pendingPhoto = '';
       return adminAuthor($('#adminContent'));
+    case 'resetappearance':
+      state.draftAppearance = { ...SiteTheme.DEFAULTS };
+      return adminAppearance($('#adminContent'));
+    case 'discardappearance':
+      discardAppearance();
+      return adminAppearance($('#adminContent'));
+    case 'testemail': {
+      const out = $('#testEmailResult');
+      const to = $('#stNotify')?.value.trim() || undefined;
+      setBusy(el, true, 'Enviando…');
+      out.textContent = '';
+      try {
+        const r = await api('POST', '/api/admin/test-email', { to });
+        out.textContent = `Enviado a ${r.to}. Revisá la bandeja (y spam).`;
+      } catch (err) {
+        out.textContent = err.message;
+      }
+      setBusy(el, false);
+      return;
+    }
     case 'changepass':
       closeDialog('adminDialog');
       return openAccount('clave');
@@ -1347,11 +1539,13 @@ document.addEventListener('input', (e) => {
     return;
   }
   if (t.form && t.form.id === 'bookForm' && ['title', 'publisher', 'genre', 'coverColor'].includes(t.name)) renderBookPreview();
+  if (t.form && t.form.id === 'appearanceForm') readAppearanceForm(t.form, t);
 });
 
 document.addEventListener('change', async (e) => {
   const t = e.target;
   if (t.form && t.form.id === 'checkoutForm' && t.name === 'method') return renderCheckoutTotals();
+  if (t.form && t.form.id === 'appearanceForm' && t.name === 'custom') return readAppearanceForm(t.form, t);
   if (t.dataset.orderstatus) return changeOrderStatus(t);
   if (t.dataset.userrole) {
     try {
@@ -1450,6 +1644,16 @@ document.addEventListener('submit', async (e) => {
         return saveAuthor(form);
       case 'bookForm':
         return saveBook(form);
+      case 'appearanceForm': {
+        const a = { ...state.draftAppearance };
+        const ok = await adminSave(form, () => api('PUT', '/api/admin/content/appearance', a), 'Apariencia guardada.', false);
+        if (ok) {
+          state.draftAppearance = null;
+          applyAppearance(state.site.appearance);
+          adminAppearance($('#adminContent'));
+        }
+        return;
+      }
       case 'settingsForm':
         return adminSave(form, () => api('PUT', '/api/admin/content/settings', formData(form)), 'Ajustes guardados.');
       case 'newUserForm': {
@@ -1466,6 +1670,9 @@ document.addEventListener('submit', async (e) => {
     else toast(ex.message, true);
   }
 });
+
+// Cerrar el panel sin guardar deshace la vista previa de apariencia.
+$('#adminDialog').addEventListener('close', discardAppearance);
 
 // Escape en el diálogo de confirmación equivale a "Cancelar".
 $('#confirmDialog').addEventListener('close', () => {

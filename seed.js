@@ -7,6 +7,7 @@ const SETTINGS = {
   shippingCost: 4500,
   freeShippingFrom: 60000,
   contactEmail: 'contacto@marinaaldao.com.ar',
+  notifyEmail: '',
   paymentInstructions:
     'Cuando confirmes el pedido te escribimos por mail con el link de pago de Mercado Pago o los datos para transferencia. Los envíos salen dentro de las 72 h hábiles de acreditado el pago, con firma y dedicatoria si la pedís en las notas.',
 };
