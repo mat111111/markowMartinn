@@ -603,3 +603,15 @@ dialog::backdrop { background: rgb(12 14 18 / .55); backdrop-filter: blur(2px); 
 .masthead__inner > * { min-width: 0; }
 .wordmark { overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 400px) { .masthead__actions { gap: var(--s-3); } .cartbtn { padding: 0 .55rem; } }
+
+/* registro de mails */
+.maillog { display: grid; gap: var(--s-2); }
+.maillog__list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); max-height: 320px; overflow: auto; }
+.maillog__list li { display: grid; grid-template-columns: 1.4rem minmax(0, 1fr) auto; gap: var(--s-3); align-items: start; padding: .55rem .75rem; border-bottom: 1px solid var(--line); font-size: .84rem; line-height: 1.45; }
+.maillog__list li:last-child { border-bottom: 0; }
+.maillog__mark { font-weight: 700; color: var(--ok); }
+.is-err .maillog__mark { color: var(--danger); }
+.maillog__main { min-width: 0; overflow-wrap: anywhere; }
+.maillog__err { color: var(--danger); }
+.maillog__time { color: var(--ink-3); white-space: nowrap; font-size: .78rem; }
+@media (max-width: 560px) { .maillog__list li { grid-template-columns: 1.4rem minmax(0, 1fr); } .maillog__time { grid-column: 2; } }

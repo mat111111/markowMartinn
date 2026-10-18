@@ -1260,10 +1260,36 @@ function adminSettings(el) {
           <button type="button" class="btn btn--small btn--ghost" data-action="testemail" ${state.site.mail?.configured ? '' : 'disabled'}>Enviar mail de prueba</button>
           <span class="muted" id="testEmailResult" style="font-size:.85rem"></span>
         </div>
+        <div class="maillog">
+          <div class="panel__bar" style="margin:0"><span class="fieldlabel">Últimos envíos</span><button type="button" class="linkbtn" data-action="refreshlog" style="font-size:.82rem">Actualizar</button></div>
+          <div id="mailLog"><p class="loading">Cargando…</p></div>
+        </div>
       </fieldset>
       <p class="form__error" role="alert"></p>
       <div class="form__actions"><button class="btn" type="submit">Guardar ajustes</button></div>
     </form>`;
+  loadMailLog();
+}
+
+async function loadMailLog() {
+  const box = $('#mailLog');
+  if (!box) return;
+  try {
+    const { log } = await api('GET', '/api/admin/mail-log');
+    box.innerHTML = log.length
+      ? `<ul class="maillog__list">${log
+          .slice(0, 15)
+          .map(
+            (e) => `<li class="${e.ok ? '' : 'is-err'}">
+          <span class="maillog__mark" aria-label="${e.ok ? 'Enviado' : 'Falló'}">${e.ok ? '✓' : '✕'}</span>
+          <span class="maillog__main"><strong>${esc(e.subject || 'Mail')}</strong> · ${esc(e.to)}${e.error ? `<br><span class="maillog__err">${esc(e.error)}</span>` : ''}</span>
+          <span class="maillog__time">${fmtDate(e.at)}</span></li>`
+          )
+          .join('')}</ul>`
+      : '<p class="muted" style="margin:.4rem 0 0;font-size:.85rem">Todavía no se intentó enviar ningún mail.</p>';
+  } catch (err) {
+    box.innerHTML = `<p class="form__error">${esc(err.message)}</p>`;
+  }
 }
 
 function mailStatusHTML() {
@@ -1564,6 +1590,8 @@ document.addEventListener('click', async (e) => {
     case 'removephoto':
       state.pendingPhoto = '';
       return adminAuthor($('#adminContent'));
+    case 'refreshlog':
+      return loadMailLog();
     case 'resetappearance':
       state.draftAppearance = { ...SiteTheme.DEFAULTS };
       return adminAppearance($('#adminContent'));
@@ -1582,6 +1610,7 @@ document.addEventListener('click', async (e) => {
         out.textContent = err.message;
       }
       setBusy(el, false);
+      loadMailLog();
       return;
     }
     case 'changepass':

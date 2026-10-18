@@ -19,6 +19,27 @@ const RESET_MINUTES = 60;
 const ORDER_STATUSES = ['pendiente', 'pagado', 'enviado', 'entregado', 'cancelado'];
 const CONTENT_KEYS = ['settings', 'author', 'socials', 'recommendations', 'appearance'];
 
+// Guarda los últimos 40 envíos de mail para verlos desde el panel (Ajustes).
+let mailLogQueue = Promise.resolve();
+function logMail(entry) {
+  mailLogQueue = mailLogQueue
+    .then(async () => {
+      const list = (await getContent('mail_log')) || [];
+      list.unshift({ at: now(), ...entry });
+      await setContent('mail_log', list.slice(0, 40));
+    })
+    .catch((err) => console.error('Registro de mails:', err.message));
+  return mailLogQueue;
+}
+mailer.setLogger((e) => {
+  if (!e.ok) console.error(`Mail a ${e.to} falló: ${e.error}`);
+  return logMail(e);
+});
+
+// Versión de los archivos estáticos: cambia en cada arranque, así el navegador
+// no usa un app.js viejo después de publicar una versión nueva.
+const ASSET_VERSION = Date.now().toString(36);
+
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -468,16 +489,21 @@ app.post(
     checkRate(req.ip);
     const email = validEmail(req.body.email);
     const mail = mailer.mailStatus();
-    // Misma respuesta exista o no la cuenta, para no revelar qué emails están registrados.
-    res.json({ ok: true, mailConfigured: mail.configured });
     if (!mail.configured) {
       console.warn('Pedido de recuperación de contraseña, pero el envío de mails no está configurado.');
-      return;
+      logMail({ to: email, subject: 'Recuperar contraseña', ok: false, error: mail.problem || 'El envío de mails no está configurado.' });
+      return res.json({ ok: true, mailConfigured: false });
     }
-    if (!resetAllowed(email)) return;
+    // El límite cuenta pedidos por email, exista o no la cuenta: no revela nada.
+    if (!resetAllowed(email)) {
+      throw new HttpError(429, 'Ya pediste 3 links en la última hora para este email. Usá el último que te llegó o probá más tarde.');
+    }
+    // Misma respuesta exista o no la cuenta, para no revelar qué emails están registrados.
+    res.json({ ok: true, mailConfigured: true });
     (async () => {
       const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
       if (user) await sendResetEmail(user, req);
+      else logMail({ to: email, subject: 'Recuperar contraseña', ok: false, error: 'No hay ninguna cuenta con este email (el usuario no ve este aviso).' });
     })().catch((err) => console.error('Mail de recuperación:', err.message));
   })
 );
@@ -876,6 +902,13 @@ admin.post(
   })
 );
 
+admin.get(
+  '/mail-log',
+  wrap(async (req, res) => {
+    res.json({ log: (await getContent('mail_log')) || [], status: mailer.mailStatus() });
+  })
+);
+
 admin.post(
   '/test-email',
   wrap(async (req, res) => {
@@ -982,7 +1015,10 @@ const escHtml = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;'
 const sendIndex = wrap(async (req, res) => {
   const settings = (await getContent('settings')) || {};
   const css = theme.css(await getContent('appearance'));
-  let html = INDEX_HTML.replace('<style id="appearanceStyle"></style>', `<style id="appearanceStyle">${css}</style>`);
+  let html = INDEX_HTML.replace('<style id="appearanceStyle"></style>', `<style id="appearanceStyle">${css}</style>`).replace(
+    /(href|src)="\/(styles\.css|theme\.js|app\.js)"/g,
+    `$1="/$2?v=${ASSET_VERSION}"`
+  );
   if (settings.siteName) html = html.replace(/<title>[^<]*<\/title>/, `<title>${escHtml(settings.siteName)}</title>`);
   res.setHeader('Cache-Control', 'no-cache');
   res.type('html').send(html);

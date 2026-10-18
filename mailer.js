@@ -23,7 +23,23 @@ function mailStatus() {
 
 let smtpTransport = null;
 
-async function sendMail({ to, toName, subject, html, replyTo, fromName }) {
+// Registro de cada intento de envío (lo usa el panel para mostrar errores).
+let logger = null;
+function setLogger(fn) {
+  logger = fn;
+}
+
+async function sendMail(opts) {
+  try {
+    await deliver(opts);
+    if (logger) await Promise.resolve(logger({ to: opts.to, subject: opts.subject, ok: true, error: '' })).catch(() => {});
+  } catch (err) {
+    if (logger) await Promise.resolve(logger({ to: opts.to, subject: opts.subject, ok: false, error: err.message })).catch(() => {});
+    throw err;
+  }
+}
+
+async function deliver({ to, toName, subject, html, replyTo, fromName }) {
   const st = mailStatus();
   if (!st.configured) throw new Error(st.problem || 'El envío de mails no está configurado.');
   const senderName = process.env.MAIL_FROM_NAME || fromName || 'Tienda';
@@ -239,4 +255,4 @@ function passwordChangedEmail({ user, settings, siteUrl, accent }) {
   };
 }
 
-module.exports = { sendMail, mailStatus, buyerEmail, sellerEmail, testEmail, resetEmail, passwordChangedEmail };
+module.exports = { sendMail, setLogger, mailStatus, buyerEmail, sellerEmail, testEmail, resetEmail, passwordChangedEmail };
