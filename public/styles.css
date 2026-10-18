@@ -427,6 +427,16 @@ dialog::backdrop { background: rgb(12 14 18 / .55); backdrop-filter: blur(2px); 
 .field input[type="color"] { padding: .2rem; height: 42px; cursor: pointer; }
 .check { display: flex; gap: .55rem; align-items: center; font-size: .9rem; cursor: pointer; }
 .check input { width: 18px; height: 18px; accent-color: var(--accent); }
+.form__alt { justify-self: center; font-size: .86rem; }
+.form__lead { margin: 0; color: var(--ink-2); font: 400 .95rem/1.55 var(--f-text); }
+.help { font-size: .86rem; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: var(--s-3); }
+.help summary { cursor: pointer; font-weight: 600; color: var(--ink); }
+.help p { margin: .5rem 0 0; line-height: 1.55; }
+.sentbox { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: var(--s-4); font: 400 .95rem/1.55 var(--f-text); }
+.sentbox p { margin: 0 0 .5rem; }
+.sentbox p:last-child { margin: 0; }
+.sentbox__title { font: 500 1.3rem/1.2 var(--f-display) !important; }
+.adminlogin__forgot { grid-column: 1 / -1; justify-self: start; font-size: .8rem; color: var(--footer-ink-2); }
 .form__error { margin: 0; min-height: 1.2em; color: var(--danger); font-size: .86rem; }
 .form__actions { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; justify-content: flex-end; padding-top: var(--s-2); }
 .form__actions--start { justify-content: flex-start; }

@@ -15,6 +15,7 @@ const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@sitio.local').toLowerCase
 const DEFAULT_ADMIN_PASSWORD = 'admin12345';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
 const SESSION_DAYS = 30;
+const RESET_MINUTES = 60;
 const ORDER_STATUSES = ['pendiente', 'pagado', 'enviado', 'entregado', 'cancelado'];
 const CONTENT_KEYS = ['settings', 'author', 'socials', 'recommendations', 'appearance'];
 
@@ -406,6 +407,114 @@ app.put(
     // Cierra las demás sesiones abiertas de esta cuenta.
     await db.run('DELETE FROM sessions WHERE user_id = ? AND token <> ?', [req.user.id, tokenHash(req.sessionToken)]);
     res.json({ ok: true });
+    sendPasswordChanged(req.user, req).catch(() => {});
+  })
+);
+
+// ---------- recuperar contraseña ----------
+// Las contraseñas se guardan con hash: no se pueden leer ni reenviar.
+// Se manda un link de un solo uso que vence en una hora para crear una nueva.
+
+const resetRequests = new Map(); // límite por email: 3 pedidos por hora
+function resetAllowed(email) {
+  const t = Date.now();
+  const list = (resetRequests.get(email) || []).filter((x) => x > t - 3600000);
+  if (list.length >= 3) return false;
+  list.push(t);
+  resetRequests.set(email, list);
+  return true;
+}
+
+async function createResetLink(user, req) {
+  await db.run('DELETE FROM password_resets WHERE user_id = ? OR expires_at < ?', [user.id, now()]);
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = new Date(Date.now() + RESET_MINUTES * 60000).toISOString();
+  await db.run('INSERT INTO password_resets (token, user_id, expires_at, used, created_at) VALUES (?, ?, ?, 0, ?)', [
+    tokenHash(token),
+    user.id,
+    expires,
+    now(),
+  ]);
+  return `${siteUrl(req)}/restablecer?t=${token}`;
+}
+
+async function sendResetEmail(user, req) {
+  const settings = (await getContent('settings')) || {};
+  const link = await createResetLink(user, req);
+  await mailer.sendMail({
+    to: user.email,
+    toName: user.name,
+    fromName: settings.siteName,
+    replyTo: settings.contactEmail || undefined,
+    ...mailer.resetEmail({ user, link, minutes: RESET_MINUTES, settings, accent: await emailAccent() }),
+  });
+}
+
+async function sendPasswordChanged(user, req) {
+  if (!mailer.mailStatus().configured) return;
+  const settings = (await getContent('settings')) || {};
+  await mailer.sendMail({
+    to: user.email,
+    toName: user.name,
+    fromName: settings.siteName,
+    replyTo: settings.contactEmail || undefined,
+    ...mailer.passwordChangedEmail({ user, settings, siteUrl: siteUrl(req), accent: await emailAccent() }),
+  });
+}
+
+app.post(
+  '/api/auth/forgot',
+  wrap(async (req, res) => {
+    checkRate(req.ip);
+    const email = validEmail(req.body.email);
+    const mail = mailer.mailStatus();
+    // Misma respuesta exista o no la cuenta, para no revelar qué emails están registrados.
+    res.json({ ok: true, mailConfigured: mail.configured });
+    if (!mail.configured) {
+      console.warn('Pedido de recuperación de contraseña, pero el envío de mails no está configurado.');
+      return;
+    }
+    if (!resetAllowed(email)) return;
+    (async () => {
+      const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
+      if (user) await sendResetEmail(user, req);
+    })().catch((err) => console.error('Mail de recuperación:', err.message));
+  })
+);
+
+async function validReset(token) {
+  if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return null;
+  const r = await db.get('SELECT * FROM password_resets WHERE token = ?', [tokenHash(token)]);
+  if (!r || r.used || r.expires_at < now()) return null;
+  return r;
+}
+
+app.get(
+  '/api/auth/reset',
+  wrap(async (req, res) => {
+    const r = await validReset(req.query.t);
+    if (!r) return res.json({ valid: false });
+    const user = await db.get('SELECT name, email FROM users WHERE id = ?', [r.user_id]);
+    res.json(user ? { valid: true, email: user.email, name: user.name } : { valid: false });
+  })
+);
+
+app.post(
+  '/api/auth/reset',
+  wrap(async (req, res) => {
+    checkRate(req.ip);
+    const r = await validReset(req.body.token);
+    if (!r) throw new HttpError(400, 'El link venció o ya se usó. Pedí uno nuevo desde “¿Olvidaste tu contraseña?”.');
+    const password = validPassword(req.body.password);
+    const changed = await db.run('UPDATE password_resets SET used = 1 WHERE token = ? AND used = 0', [r.token]);
+    if (!changed) throw new HttpError(400, 'Este link ya se usó. Pedí uno nuevo.');
+    await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hashPassword(password), r.user_id]);
+    await db.run('DELETE FROM sessions WHERE user_id = ?', [r.user_id]);
+    await db.run('DELETE FROM password_resets WHERE user_id = ?', [r.user_id]);
+    await createSession(req, res, r.user_id);
+    const user = await db.get('SELECT * FROM users WHERE id = ?', [r.user_id]);
+    res.json({ me: publicUser(user) });
+    sendPasswordChanged(user, req).catch(() => {});
   })
 );
 
@@ -822,6 +931,20 @@ admin.post(
   })
 );
 
+admin.post(
+  '/users/:id/send-reset',
+  wrap(async (req, res) => {
+    const user = await db.get('SELECT * FROM users WHERE id = ?', [Number(req.params.id)]);
+    if (!user) throw new HttpError(404, 'Ese usuario no existe.');
+    try {
+      await sendResetEmail(user, req);
+    } catch (err) {
+      throw new HttpError(502, `No se pudo enviar: ${err.message}`);
+    }
+    res.json({ ok: true, to: user.email });
+  })
+);
+
 admin.put(
   '/users/:id',
   wrap(async (req, res) => {
@@ -911,7 +1034,22 @@ async function seedIfEmpty() {
       console.log(`Contraseña inicial: ${DEFAULT_ADMIN_PASSWORD}  (cambiala desde "Mi cuenta" apenas entres)`);
     }
   }
+  // Recuperación del administrador sin mail: definí ADMIN_RESET_PASSWORD, reiniciá,
+  // entrá con ADMIN_EMAIL y esa contraseña, y después borrá la variable.
+  if (process.env.ADMIN_RESET_PASSWORD) {
+    const pass = process.env.ADMIN_RESET_PASSWORD;
+    if (pass.length < 8) {
+      console.warn('ADMIN_RESET_PASSWORD tiene que tener al menos 8 caracteres. No se cambió nada.');
+    } else {
+      const u = await db.get('SELECT id FROM users WHERE email = ?', [ADMIN_EMAIL]);
+      if (u) await db.run("UPDATE users SET password_hash = ?, role = 'admin' WHERE id = ?", [hashPassword(pass), u.id]);
+      else await db.run('INSERT INTO users (name, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)', ['Administración', ADMIN_EMAIL, hashPassword(pass), 'admin', now()]);
+      if (u) await db.run('DELETE FROM sessions WHERE user_id = ?', [u.id]);
+      console.warn(`Contraseña de ${ADMIN_EMAIL} restablecida con ADMIN_RESET_PASSWORD. Borrá esa variable y volvé a publicar.`);
+    }
+  }
   await db.run('DELETE FROM sessions WHERE expires_at < ?', [now()]);
+  await db.run('DELETE FROM password_resets WHERE expires_at < ?', [now()]);
 }
 
 db.init()

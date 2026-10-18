@@ -29,7 +29,8 @@ async function sendMail({ to, toName, subject, html, replyTo, fromName }) {
   const senderName = process.env.MAIL_FROM_NAME || fromName || 'Tienda';
 
   if (PROVIDER === 'consola') {
-    console.log(`\n--- MAIL (simulado) ---\nPara: ${to}\nAsunto: ${subject}\nResponder a: ${replyTo || '-'}\n${html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600)}\n-----------------------\n`);
+    const links = [...new Set([...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, '&')))];
+    console.log(`\n--- MAIL (simulado) ---\nPara: ${to}\nAsunto: ${subject}\nResponder a: ${replyTo || '-'}\n${html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600)}${links.length ? `\nEnlaces: ${links.join('  ')}` : ''}\n-----------------------\n`);
     return;
   }
 
@@ -196,4 +197,46 @@ function testEmail({ settings, accent }) {
   };
 }
 
-module.exports = { sendMail, mailStatus, buyerEmail, sellerEmail, testEmail };
+function button(href, label, accent) {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0;"><tr>
+    <td style="background:${accent};border-radius:3px;">
+      <a href="${esc(href)}" style="display:inline-block;padding:13px 22px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;">${esc(label)}</a>
+    </td></tr></table>`;
+}
+
+function resetEmail({ user, link, minutes, settings, accent }) {
+  const siteName = settings.siteName || 'Tienda';
+  const first = String(user.name || '').split(' ')[0];
+  const body = `
+    <h1 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-weight:normal;font-size:28px;line-height:1.2;">Recuperá tu cuenta</h1>
+    <p style="margin:0 0 14px;">Hola${first ? ' ' + esc(first) : ''}, pediste recuperar el acceso a ${esc(siteName)}.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f1;margin:0 0 6px;">
+      <tr><td style="padding:14px 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#14181f;">
+        <span style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#6b727c;">Tu usuario para ingresar</span><br>
+        <strong style="font-size:16px;">${esc(user.email)}</strong>
+      </td></tr>
+    </table>
+    <p style="margin:14px 0 0;">Por seguridad no guardamos tu contraseña en texto, así que no podemos enviártela. Con este botón creás una nueva:</p>
+    ${button(link, 'Crear una contraseña nueva', accent)}
+    <p style="margin:0 0 6px;font-size:13px;color:#5b626c;">El link sirve una sola vez y vence en ${minutes} minutos. Si el botón no funciona, copiá esta dirección en el navegador:<br><span style="word-break:break-all;">${esc(link)}</span></p>
+    <p style="margin:16px 0 0;font-size:13px;color:#5b626c;">Si no lo pediste vos, ignorá este mail: tu contraseña sigue igual.</p>`;
+  return {
+    subject: `Recuperá tu cuenta · ${siteName}`,
+    html: layout({ siteName, accent, preheader: `Tu usuario es ${user.email}. Creá una contraseña nueva.`, body, footer: `Mail automático de ${esc(siteName)}.` }),
+  };
+}
+
+function passwordChangedEmail({ user, settings, siteUrl, accent }) {
+  const siteName = settings.siteName || 'Tienda';
+  const body = `
+    <h1 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-weight:normal;font-size:26px;line-height:1.2;">Cambiaste tu contraseña</h1>
+    <p style="margin:0 0 10px;">La contraseña de la cuenta <strong>${esc(user.email)}</strong> se cambió recién. Por seguridad cerramos las sesiones abiertas en otros dispositivos.</p>
+    <p style="margin:0;">Si no fuiste vos, pedí un link nuevo desde “¿Olvidaste tu contraseña?”${settings.contactEmail ? ` o escribinos a ${esc(settings.contactEmail)}` : ''}.</p>
+    ${siteUrl ? button(siteUrl, 'Ir al sitio', accent) : ''}`;
+  return {
+    subject: `Tu contraseña se cambió · ${siteName}`,
+    html: layout({ siteName, accent, preheader: 'Aviso de seguridad de tu cuenta.', body, footer: `Mail automático de ${esc(siteName)}.` }),
+  };
+}
+
+module.exports = { sendMail, mailStatus, buyerEmail, sellerEmail, testEmail, resetEmail, passwordChangedEmail };

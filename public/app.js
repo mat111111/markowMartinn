@@ -440,16 +440,57 @@ function openBook(id) {
 function openAuth(tab = 'login', lead) {
   $('#authLead').textContent = lead || 'Ingresá para comprar y seguir tus pedidos.';
   setAuthTab(tab);
-  $$('#authDialog .form__error').forEach((e) => (e.textContent = ''));
   openDialog('authDialog');
-  setTimeout(() => (tab === 'login' ? $('#loginEmail') : $('#regName')).focus(), 50);
+  if (tab === 'login' || tab === 'register') setTimeout(() => (tab === 'login' ? $('#loginEmail') : $('#regName')).focus(), 50);
 }
 
 function setAuthTab(tab) {
+  const recovering = tab === 'forgot' || tab === 'sent';
   $('#loginForm').hidden = tab !== 'login';
   $('#registerForm').hidden = tab !== 'register';
+  $('#forgotForm').hidden = tab !== 'forgot';
+  $('#forgotSent').hidden = tab !== 'sent';
+  $('#authDialog .tabs').hidden = recovering;
   $('#tabLogin').setAttribute('aria-selected', String(tab === 'login'));
   $('#tabRegister').setAttribute('aria-selected', String(tab === 'register'));
+  $('#authTitle').textContent = recovering ? 'Recuperar tu cuenta' : 'Tu cuenta';
+  $('#authLead').hidden = recovering;
+  $$('#authDialog .form__error').forEach((e) => (e.textContent = ''));
+  if (tab === 'forgot') {
+    const mail = state.site?.settings?.contactEmail;
+    $('#forgotContact').textContent = mail ? ` a ${mail}` : '';
+    const typed = $('#loginEmail').value || $('#adminEmail').value;
+    if (typed && !$('#forgotEmail').value) $('#forgotEmail').value = typed;
+    setTimeout(() => $('#forgotEmail').focus(), 30);
+  }
+}
+
+async function openReset(token) {
+  const body = $('#resetBody');
+  body.innerHTML = '<p class="loading">Revisando el link…</p>';
+  openDialog('resetDialog');
+  let info = { valid: false };
+  try {
+    info = await api('GET', `/api/auth/reset?t=${encodeURIComponent(token)}`);
+  } catch {
+    /* se muestra como link inválido */
+  }
+  if (!info.valid) {
+    body.innerHTML = `
+      <p class="modal__lead">Este link venció o ya se usó. Los links sirven una sola vez y duran una hora.</p>
+      <button class="btn btn--block" data-action="forgot">Pedir un link nuevo</button>`;
+    return;
+  }
+  body.innerHTML = `
+    <form class="form" id="resetForm" novalidate>
+      <input type="hidden" name="token" value="${esc(token)}">
+      <div class="field"><label>Tu usuario</label><input value="${esc(info.email)}" autocomplete="username" readonly></div>
+      <div class="field"><label for="rsPass">Contraseña nueva</label><input id="rsPass" name="password" type="password" autocomplete="new-password" minlength="8" required><small>Mínimo 8 caracteres.</small></div>
+      <div class="field"><label for="rsPass2">Repetila</label><input id="rsPass2" name="password2" type="password" autocomplete="new-password" required></div>
+      <p class="form__error" role="alert"></p>
+      <button class="btn btn--block" type="submit">Guardar y entrar</button>
+    </form>`;
+  setTimeout(() => $('#rsPass')?.focus(), 30);
 }
 
 async function afterLogin(me) {
@@ -1178,7 +1219,10 @@ async function adminUsers(el) {
             <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Administrador</option></select></td>
           <td class="num">${u.orders}</td>
           <td class="muted">${fmtDate(u.createdAt).split(',')[0]}</td>
-          <td>${u.id === state.me.id ? '' : `<button class="iconbtn iconbtn--danger" data-deleteuser="${u.id}" aria-label="Borrar ${esc(u.name)}" title="Borrar">✕</button>`}</td>
+          <td><div class="adminrow__actions">
+            <button class="linkbtn" style="font-size:.82rem;white-space:nowrap" data-sendreset="${u.id}" ${state.site.mail?.configured ? '' : 'disabled title="Configurá los mails para usar esta opción"'}>Enviar link de contraseña</button>
+            ${u.id === state.me.id ? '' : `<button class="iconbtn iconbtn--danger" data-deleteuser="${u.id}" aria-label="Borrar ${esc(u.name)}" title="Borrar">✕</button>`}
+          </div></td>
         </tr>`
           )
           .join('')}</tbody>
@@ -1423,6 +1467,20 @@ document.addEventListener('click', async (e) => {
     return adminOrders($('#adminContent'), false);
   }
   if (ds.deletebook) return deleteBook(Number(ds.deletebook));
+  if (ds.sendreset) {
+    const u = state.adminUsers.find((x) => x.id === Number(ds.sendreset));
+    if (!u) return;
+    if (!(await confirmAction(`¿Enviar a ${u.email} un mail con su usuario y un link para crear una contraseña nueva?`, 'Enviar mail'))) return;
+    setBusy(el, true, 'Enviando…');
+    try {
+      const r = await api('POST', `/api/admin/users/${u.id}/send-reset`, {});
+      toast(`Link enviado a ${r.to}.`);
+    } catch (err) {
+      toast(err.message, true);
+    }
+    setBusy(el, false);
+    return;
+  }
   if (ds.deleteuser) {
     const u = state.adminUsers.find((x) => x.id === Number(ds.deleteuser));
     if (!u) return;
@@ -1483,6 +1541,10 @@ document.addEventListener('click', async (e) => {
   switch (ds.action) {
     case 'logout':
       return logout();
+    case 'forgot':
+      closeDialog('resetDialog');
+      if ($('#authDialog').open) return setAuthTab('forgot');
+      return openAuth('forgot');
     case 'checkout':
       return openCheckout();
     case 'myorders':
@@ -1604,6 +1666,38 @@ document.addEventListener('submit', async (e) => {
         setBusy(btn, false);
         return afterLogin(res.me);
       }
+      case 'forgotForm': {
+        setBusy(btn, true, 'Enviando…');
+        const email = formData(form).email.trim();
+        const r = await api('POST', '/api/auth/forgot', { email });
+        setBusy(btn, false);
+        if (!r.mailConfigured) {
+          const mail = state.site?.settings?.contactEmail;
+          err.textContent = `Este sitio todavía no tiene el envío de mails activado.${mail ? ` Escribinos a ${mail} para recuperar tu cuenta.` : ''}`;
+          return;
+        }
+        $('#forgotSentEmail').textContent = email;
+        form.reset();
+        return setAuthTab('sent');
+      }
+      case 'resetForm': {
+        const d = formData(form);
+        if (d.password !== d.password2) {
+          err.textContent = 'Las dos contraseñas no coinciden.';
+          return;
+        }
+        setBusy(btn, true, 'Guardando…');
+        const res = await api('POST', '/api/auth/reset', { token: d.token, password: d.password });
+        try {
+          history.replaceState(null, '', '/');
+        } catch {
+          /* sin historial */
+        }
+        closeDialog('resetDialog');
+        state.me = res.me;
+        await loadSite();
+        return toast('Listo, guardamos tu contraseña nueva y ya entraste.');
+      }
       case 'adminLoginForm': {
         $('#adminLoginError').textContent = '';
         setBusy(btn, true, 'Entrando…');
@@ -1686,7 +1780,18 @@ $('#confirmDialog').addEventListener('close', () => {
 
 loadCart();
 loadSite()
-  .then(() => (isAdmin() ? loadAdminOrders().catch(() => {}) : null))
+  .then(() => {
+    if (location.pathname === '/restablecer') {
+      const t = new URLSearchParams(location.search).get('t');
+      if (t) openReset(t);
+      try {
+        history.replaceState(null, '', '/');
+      } catch {
+        /* sin historial */
+      }
+    }
+    return isAdmin() ? loadAdminOrders().catch(() => {}) : null;
+  })
   .catch((e) => {
     $('#main').innerHTML = `<div class="wrap" style="padding-block:6rem"><p class="empty">${esc(e.message)}</p></div>`;
   });

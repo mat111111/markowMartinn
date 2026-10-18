@@ -9,13 +9,14 @@ Sitio para un escritor o escritora con biografía, libros a la venta, lecturas r
 - Biografía con foto, datos breves y cita.
 - Lecturas recomendadas y redes sociales.
 - Carrito, creación de cuenta, checkout con envío o retiro, e historial de pedidos en "Mi cuenta".
+- **¿Olvidaste tu contraseña o tu email?**: llega un mail con el usuario (email de la cuenta) y un link para crear una contraseña nueva. El link sirve una sola vez y vence en una hora. Después del cambio llega un aviso de seguridad.
 
 **Para el administrador** (login al pie de la página)
 - Editar autor, foto, biografía y datos.
 - Crear, editar, ocultar, destacar y borrar libros; subir tapas o usar tapas tipográficas de color.
 - Editar lecturas recomendadas y redes (con orden).
 - Ver pedidos y cambiar su estado (pendiente, pagado, enviado, entregado, cancelado). Cancelar devuelve el stock.
-- Ver usuarios, crear cuentas y dar o quitar el rol de administrador.
+- Ver usuarios, crear cuentas, dar o quitar el rol de administrador y enviarle a cualquier usuario el link para crear una contraseña nueva.
 - Apariencia: tamaño de letra (85 % a 130 %), color de letras, fondo y acento, con paletas listas, vista previa en vivo y aviso si el contraste es bajo.
 - Ajustes: nombre del sitio, email de contacto, email del vendedor para avisos, costo de envío, envío gratis desde cierto monto e instrucciones de pago.
 
@@ -86,6 +87,23 @@ Render borra el disco en cada deploy, así que en producción se usa PostgreSQL.
      - `BREVO_API_KEY`, `MAIL_FROM` y las demás de la sección de mails
 4. Deploy. Con `DATABASE_URL` definida el servidor usa PostgreSQL automáticamente y crea las tablas solo.
 
+## Recuperar contraseñas
+
+Las contraseñas se guardan con `scrypt` (un hash de un solo sentido): **nadie puede leerlas, ni siquiera el administrador**, así que el sitio nunca las envía por mail. En su lugar manda:
+
+- el **usuario** de la cuenta (su email), para quien no recuerda con cuál se registró;
+- un **link de un solo uso** que vence en 60 minutos, para crear una contraseña nueva. Al usarlo se cierran todas las sesiones abiertas de esa cuenta.
+
+La respuesta del formulario es la misma exista o no la cuenta, para no revelar qué emails están registrados. Hay un límite de 3 pedidos por hora por email.
+
+Necesita los mails configurados (ver arriba). Si no lo están, el formulario le indica al usuario que escriba al email de contacto.
+
+**Si el administrador pierde su contraseña y los mails no funcionan:**
+
+1. En Render, agregá la variable `ADMIN_RESET_PASSWORD` con una contraseña nueva (8 caracteres o más).
+2. Esperá que se reinicie y entrá con tu `ADMIN_EMAIL` y esa contraseña.
+3. **Borrá la variable** y guardá. Si la dejás, la contraseña se vuelve a pisar en cada reinicio.
+
 ## Estructura
 
 ```
@@ -114,6 +132,8 @@ public/
 |---|---|---|
 | GET | `/api/site` | Contenido público (y libros ocultos si sos admin) |
 | POST | `/api/auth/register` · `/login` · `/logout` | Cuentas |
+| POST | `/api/auth/forgot` | Pedir el mail de recuperación |
+| GET / POST | `/api/auth/reset` | Validar el link y guardar la contraseña nueva |
 | GET / PUT | `/api/me`, `/api/me/password`, `/api/me/orders` | Datos y pedidos propios |
 | POST | `/api/orders` | Crear pedido |
 | PUT | `/api/admin/content/:key` | `settings`, `author`, `socials`, `recommendations`, `appearance` |
@@ -122,3 +142,4 @@ public/
 | POST | `/api/admin/orders/:id/resend` | Reenviar los mails de un pedido |
 | POST | `/api/admin/test-email` | Mail de prueba |
 | GET / POST / PUT / DELETE | `/api/admin/users[/:id]` | Usuarios y roles |
+| POST | `/api/admin/users/:id/send-reset` | Enviarle a un usuario el link de contraseña |

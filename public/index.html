@@ -131,6 +131,7 @@
           <input id="adminPass" name="password" type="password" autocomplete="current-password" placeholder="Contraseña" required>
           <button class="btn btn--small btn--invert" type="submit">Entrar</button>
           <p class="adminlogin__error" id="adminLoginError" role="alert"></p>
+          <button type="button" class="linkbtn linkbtn--light adminlogin__forgot" data-action="forgot">¿Olvidaste tu contraseña?</button>
         </form>
         <div class="adminlogin__active" id="adminActive" hidden>
           <p>Sesión de administración activa.</p>
@@ -163,7 +164,27 @@
       <div class="field"><label for="loginPass">Contraseña</label><input id="loginPass" name="password" type="password" autocomplete="current-password" required></div>
       <p class="form__error" role="alert"></p>
       <button class="btn btn--block" type="submit">Ingresar</button>
+      <button type="button" class="linkbtn form__alt" data-action="forgot">¿Olvidaste tu contraseña o tu email?</button>
     </form>
+    <form class="form" id="forgotForm" novalidate hidden>
+      <p class="form__lead">Escribí el email con el que te registraste. Te mandamos tu usuario y un link para crear una contraseña nueva.</p>
+      <div class="field"><label for="forgotEmail">Email</label><input id="forgotEmail" name="email" type="email" autocomplete="email" required></div>
+      <p class="form__error" role="alert"></p>
+      <button class="btn btn--block" type="submit">Enviarme el link</button>
+      <details class="help">
+        <summary>No me acuerdo con qué email me registré</summary>
+        <p>Probá con cada dirección que uses: el mail solo llega a la que tenga una cuenta acá. Revisá también la carpeta de spam. Si ninguna funciona, escribinos<span id="forgotContact"></span> con tu nombre y te ayudamos a recuperarla.</p>
+      </details>
+      <button type="button" class="linkbtn form__alt" data-authtab="login">Volver a ingresar</button>
+    </form>
+    <div class="form" id="forgotSent" hidden>
+      <div class="sentbox">
+        <p class="sentbox__title">Revisá tu correo</p>
+        <p>Si <strong id="forgotSentEmail"></strong> tiene una cuenta, en unos minutos te llega un mail con tu usuario y un link para crear una contraseña nueva. El link vence en una hora.</p>
+        <p class="muted">¿No llega? Mirá en spam o probá con otro email.</p>
+      </div>
+      <button type="button" class="btn btn--block btn--ghost" data-authtab="login">Volver a ingresar</button>
+    </div>
     <form class="form" id="registerForm" novalidate hidden>
       <div class="field"><label for="regName">Nombre y apellido</label><input id="regName" name="name" autocomplete="name" required></div>
       <div class="field"><label for="regEmail">Email</label><input id="regEmail" name="email" type="email" autocomplete="email" required></div>
@@ -171,6 +192,13 @@
       <p class="form__error" role="alert"></p>
       <button class="btn btn--block" type="submit">Crear cuenta</button>
     </form>
+  </dialog>
+
+  <!-- Nueva contraseña (desde el link del mail) -->
+  <dialog class="modal modal--narrow" id="resetDialog" aria-labelledby="resetTitle">
+    <button class="modal__close" data-close aria-label="Cerrar">×</button>
+    <h2 class="modal__title" id="resetTitle">Nueva contraseña</h2>
+    <div id="resetBody"></div>
   </dialog>
 
   <!-- Mi cuenta -->
