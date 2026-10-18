@@ -207,7 +207,9 @@ app.use('/api', (req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   // Los avisos de Mercado Pago vienen de sus servidores; se verifican consultando su API.
   if (req.path === '/mp/webhook') return next();
-  if (!req.is('application/json')) return next(new HttpError(415, 'Formato no soportado.'));
+  // DELETE no lleva cuerpo; un formulario de otro sitio no puede enviar DELETE, y el navegador
+  // bloquea un DELETE de otro origen (CORS), así que alcanza con revisar el origen.
+  if (req.method !== 'DELETE' && !req.is('application/json')) return next(new HttpError(415, 'Formato no soportado.'));
   const origin = req.get('origin');
   if (origin && new URL(origin).host !== req.get('host')) {
     return next(new HttpError(403, 'Origen no permitido.'));

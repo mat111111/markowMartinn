@@ -20,9 +20,10 @@ const STATUSES = ['pendiente', 'pagado', 'enviado', 'entregado', 'cancelado'];
 
 async function api(method, url, body) {
   const opts = { method, headers: {}, credentials: 'same-origin' };
-  if (body !== undefined) {
+  // Toda escritura va como JSON (también los DELETE sin datos).
+  if (body !== undefined || method !== 'GET') {
     opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
+    opts.body = JSON.stringify(body === undefined ? {} : body);
   }
   let res;
   try {
