@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Marina Aldao</title>
+  <meta name="description" content="Sitio oficial: libros, biografía, lecturas recomendadas y tienda.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..700;1,6..96,400..600&family=Literata:ital,opsz,wght@0,7..72,400..600;1,7..72,400&family=Schibsted+Grotesk:wght@400..700&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2314181F'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' fill='%23F3F4F1' text-anchor='middle' font-style='italic'%3EA%3C/text%3E%3C/svg%3E">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#obra">Ir a los libros</a>
+
+  <div class="adminbar" id="adminbar" hidden>
+    <div class="wrap adminbar__inner">
+      <span class="adminbar__label"><span class="dot" aria-hidden="true"></span>Modo administración</span>
+      <div class="adminbar__actions">
+        <button class="linkbtn" data-panel="libros">Libros</button>
+        <button class="linkbtn" data-panel="pedidos">Pedidos <span class="count" id="pendingCount" hidden></span></button>
+        <button class="linkbtn" data-panel="usuarios">Usuarios</button>
+        <button class="btn btn--small btn--invert" data-panel="autor">Editar sitio</button>
+      </div>
+    </div>
+  </div>
+
+  <header class="masthead" id="masthead">
+    <div class="wrap masthead__inner">
+      <a class="wordmark" href="#inicio" id="wordmark">Marina Aldao</a>
+      <nav class="mainnav" aria-label="Secciones">
+        <a href="#obra">Obra</a>
+        <a href="#biografia">Biografía</a>
+        <a href="#lecturas">Lecturas</a>
+        <a href="#redes">Redes</a>
+      </nav>
+      <div class="masthead__actions">
+        <button class="linkbtn" id="accountBtn">Ingresar</button>
+        <button class="cartbtn" id="cartBtn" aria-label="Abrir carrito">
+          Carrito <span class="cartbtn__n" id="cartCount">0</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="inicio" aria-labelledby="heroName">
+      <div class="wrap hero__grid">
+        <div class="hero__text">
+          <p class="eyebrow" id="heroRole">Escritora</p>
+          <h1 class="hero__name" id="heroName">Marina Aldao</h1>
+          <p class="hero__line" id="heroLine"></p>
+          <div class="hero__cta">
+            <a class="btn" href="#obra">Ver los libros</a>
+            <a class="btn btn--ghost" href="#biografia">Leer la biografía</a>
+          </div>
+        </div>
+        <aside class="hero__feature" id="heroFeature" aria-label="Libro destacado"></aside>
+      </div>
+    </section>
+
+    <section class="section" id="obra" aria-labelledby="obraTitle">
+      <div class="wrap">
+        <div class="section__head">
+          <h2 class="section__title" id="obraTitle">Obra</h2>
+          <p class="section__note" id="obraNote"></p>
+          <button class="editbtn" data-panel="libros" hidden>Editar libros</button>
+        </div>
+        <div class="shelf" id="shelf"></div>
+      </div>
+    </section>
+
+    <section class="section section--band" id="biografia" aria-labelledby="bioTitle">
+      <div class="wrap bio">
+        <figure class="bio__figure">
+          <div class="bio__photo" id="bioPhoto"></div>
+          <figcaption class="bio__caption" id="bioLocation"></figcaption>
+        </figure>
+        <div class="bio__body">
+          <div class="section__head section__head--tight">
+            <h2 class="section__title" id="bioTitle">Biografía</h2>
+            <button class="editbtn" data-panel="autor" hidden>Editar biografía</button>
+          </div>
+          <div class="bio__text" id="bioText"></div>
+          <dl class="facts" id="bioFacts"></dl>
+          <blockquote class="pullquote" id="bioQuote"></blockquote>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="lecturas" aria-labelledby="recTitle">
+      <div class="wrap">
+        <div class="section__head">
+          <h2 class="section__title" id="recTitle">Lecturas recomendadas</h2>
+          <p class="section__note" id="recNote">Libros a los que vuelve una y otra vez, y por qué.</p>
+          <button class="editbtn" data-panel="recomendaciones" hidden>Editar lecturas</button>
+        </div>
+        <ol class="recs" id="recs"></ol>
+      </div>
+    </section>
+
+    <section class="section section--band" id="redes" aria-labelledby="socialTitle">
+      <div class="wrap">
+        <div class="section__head">
+          <h2 class="section__title" id="socialTitle">Redes y contacto</h2>
+          <button class="editbtn" data-panel="redes" hidden>Editar redes</button>
+        </div>
+        <ul class="socials" id="socials"></ul>
+        <div class="contact" id="contact"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer__grid">
+      <div class="footer__colophon">
+        <p class="footer__name" id="footerName">Marina Aldao</p>
+        <p class="footer__meta" id="footerMeta"></p>
+      </div>
+      <div class="footer__ship" id="footerShip"></div>
+      <div class="adminlogin" id="adminLogin">
+        <p class="adminlogin__title">Acceso de administración</p>
+        <form id="adminLoginForm" class="adminlogin__form" novalidate>
+          <label class="sr" for="adminEmail">Email de administrador</label>
+          <input id="adminEmail" name="email" type="email" autocomplete="username" placeholder="Email" required>
+          <label class="sr" for="adminPass">Contraseña</label>
+          <input id="adminPass" name="password" type="password" autocomplete="current-password" placeholder="Contraseña" required>
+          <button class="btn btn--small btn--invert" type="submit">Entrar</button>
+          <p class="adminlogin__error" id="adminLoginError" role="alert"></p>
+        </form>
+        <div class="adminlogin__active" id="adminActive" hidden>
+          <p>Sesión de administración activa.</p>
+          <div class="adminlogin__row">
+            <button class="btn btn--small btn--invert" data-panel="autor">Abrir panel</button>
+            <button class="linkbtn linkbtn--light" data-action="logout">Cerrar sesión</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Detalle de libro -->
+  <dialog class="modal modal--book" id="bookDialog" aria-labelledby="bookDialogTitle">
+    <button class="modal__close" data-close aria-label="Cerrar">×</button>
+    <div id="bookDialogBody"></div>
+  </dialog>
+
+  <!-- Ingresar / Crear cuenta -->
+  <dialog class="modal modal--narrow" id="authDialog" aria-labelledby="authTitle">
+    <button class="modal__close" data-close aria-label="Cerrar">×</button>
+    <h2 class="modal__title" id="authTitle">Tu cuenta</h2>
+    <p class="modal__lead" id="authLead">Ingresá para comprar y seguir tus pedidos.</p>
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" id="tabLogin" aria-selected="true" data-authtab="login">Ingresar</button>
+      <button class="tab" role="tab" id="tabRegister" aria-selected="false" data-authtab="register">Crear cuenta</button>
+    </div>
+    <form class="form" id="loginForm" novalidate>
+      <div class="field"><label for="loginEmail">Email</label><input id="loginEmail" name="email" type="email" autocomplete="email" required></div>
+      <div class="field"><label for="loginPass">Contraseña</label><input id="loginPass" name="password" type="password" autocomplete="current-password" required></div>
+      <p class="form__error" role="alert"></p>
+      <button class="btn btn--block" type="submit">Ingresar</button>
+    </form>
+    <form class="form" id="registerForm" novalidate hidden>
+      <div class="field"><label for="regName">Nombre y apellido</label><input id="regName" name="name" autocomplete="name" required></div>
+      <div class="field"><label for="regEmail">Email</label><input id="regEmail" name="email" type="email" autocomplete="email" required></div>
+      <div class="field"><label for="regPass">Contraseña</label><input id="regPass" name="password" type="password" autocomplete="new-password" minlength="8" required><small>Mínimo 8 caracteres.</small></div>
+      <p class="form__error" role="alert"></p>
+      <button class="btn btn--block" type="submit">Crear cuenta</button>
+    </form>
+  </dialog>
+
+  <!-- Mi cuenta -->
+  <dialog class="drawer" id="accountDialog" aria-labelledby="accountTitle">
+    <div class="drawer__head">
+      <h2 class="drawer__title" id="accountTitle">Mi cuenta</h2>
+      <button class="modal__close modal__close--static" data-close aria-label="Cerrar">×</button>
+    </div>
+    <div class="tabs tabs--drawer" role="tablist">
+      <button class="tab" role="tab" aria-selected="true" data-accounttab="pedidos">Pedidos</button>
+      <button class="tab" role="tab" aria-selected="false" data-accounttab="datos">Mis datos</button>
+      <button class="tab" role="tab" aria-selected="false" data-accounttab="clave">Contraseña</button>
+    </div>
+    <div class="drawer__body" id="accountBody"></div>
+    <div class="drawer__foot">
+      <button class="linkbtn" data-action="logout">Cerrar sesión</button>
+    </div>
+  </dialog>
+
+  <!-- Carrito -->
+  <dialog class="drawer" id="cartDialog" aria-labelledby="cartTitle">
+    <div class="drawer__head">
+      <h2 class="drawer__title" id="cartTitle">Carrito</h2>
+      <button class="modal__close modal__close--static" data-close aria-label="Cerrar">×</button>
+    </div>
+    <div class="drawer__body" id="cartBody"></div>
+    <div class="drawer__foot drawer__foot--cart" id="cartFoot"></div>
+  </dialog>
+
+  <!-- Checkout -->
+  <dialog class="modal" id="checkoutDialog" aria-labelledby="checkoutTitle">
+    <button class="modal__close" data-close aria-label="Cerrar">×</button>
+    <div id="checkoutBody"></div>
+  </dialog>
+
+  <!-- Panel de administración -->
+  <dialog class="drawer drawer--wide" id="adminDialog" aria-labelledby="adminTitle">
+    <div class="drawer__head">
+      <div>
+        <p class="eyebrow eyebrow--small">Panel</p>
+        <h2 class="drawer__title" id="adminTitle">Administración del sitio</h2>
+      </div>
+      <button class="modal__close modal__close--static" data-close aria-label="Cerrar">×</button>
+    </div>
+    <div class="admintabs" role="tablist" id="adminTabs">
+      <button class="tab" role="tab" data-admintab="autor">Autor</button>
+      <button class="tab" role="tab" data-admintab="libros">Libros</button>
+      <button class="tab" role="tab" data-admintab="recomendaciones">Lecturas</button>
+      <button class="tab" role="tab" data-admintab="redes">Redes</button>
+      <button class="tab" role="tab" data-admintab="pedidos">Pedidos</button>
+      <button class="tab" role="tab" data-admintab="usuarios">Usuarios</button>
+      <button class="tab" role="tab" data-admintab="ajustes">Ajustes</button>
+    </div>
+    <div class="drawer__body" id="adminBody"></div>
+  </dialog>
+
+  <!-- Confirmación -->
+  <dialog class="modal modal--confirm" id="confirmDialog" aria-labelledby="confirmText">
+    <p class="confirm__text" id="confirmText"></p>
+    <div class="confirm__actions">
+      <button class="btn btn--ghost" data-confirm="no">Cancelar</button>
+      <button class="btn btn--danger" data-confirm="yes" id="confirmYes">Borrar</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
