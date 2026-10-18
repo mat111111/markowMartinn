@@ -234,6 +234,34 @@ function commentPendingEmail({ comment, settings, siteUrl, accent }) {
   };
 }
 
+function inquiryEmail({ inquiry, settings, siteUrl, accent }) {
+  const siteName = settings.siteName || 'Tienda';
+  const body = `
+    <h1 style="margin:0 0 8px;font-family:Georgia,'Times New Roman',serif;font-weight:normal;font-size:26px;line-height:1.2;">Nueva consulta</h1>
+    <p style="margin:0 0 10px;"><strong>${esc(inquiry.name)}</strong> (${esc(inquiry.email)}) escribió:</p>
+    <blockquote style="margin:0 0 14px;padding:12px 16px;background:#f3f4f1;border-left:3px solid ${accent};white-space:pre-line;">${esc(inquiry.message)}</blockquote>
+    <p style="margin:0;">Podés responder este mail directamente, o desde el panel → Consultas.</p>
+    ${siteUrl ? button(siteUrl, 'Abrir el sitio', accent) : ''}`;
+  return {
+    subject: `Consulta de ${inquiry.name} · ${siteName}`,
+    html: layout({ siteName, accent, preheader: String(inquiry.message).slice(0, 90), body, footer: `Mail automático de ${esc(siteName)}.` }),
+  };
+}
+
+function inquiryReplyEmail({ inquiry, reply, settings, accent }) {
+  const siteName = settings.siteName || 'Tienda';
+  const first = String(inquiry.name || '').split(' ')[0];
+  const body = `
+    <p style="margin:0 0 14px;">Hola${first ? ' ' + esc(first) : ''}:</p>
+    <div style="margin:0 0 18px;white-space:pre-line;font-size:16px;line-height:1.6;">${esc(reply)}</div>
+    <p style="margin:0 0 6px;font-size:13px;color:#5b626c;">Tu consulta:</p>
+    <blockquote style="margin:0;padding:10px 14px;background:#f3f4f1;border-left:3px solid ${accent};white-space:pre-line;font-size:14px;color:#3d434c;">${esc(inquiry.message)}</blockquote>`;
+  return {
+    subject: `Respuesta a tu consulta · ${siteName}`,
+    html: layout({ siteName, accent, preheader: String(reply).slice(0, 90), body, footer: `Si tenés otra duda, respondé este mail.` }),
+  };
+}
+
 function testEmail({ settings, accent }) {
   const siteName = settings.siteName || 'Tienda';
   return {
@@ -290,4 +318,4 @@ function passwordChangedEmail({ user, settings, siteUrl, accent }) {
   };
 }
 
-module.exports = { sendMail, setLogger, mailStatus, buyerEmail, sellerEmail, testEmail, paidEmail, commentPendingEmail, resetEmail, passwordChangedEmail };
+module.exports = { sendMail, setLogger, mailStatus, buyerEmail, sellerEmail, testEmail, paidEmail, commentPendingEmail, inquiryEmail, inquiryReplyEmail, resetEmail, passwordChangedEmail };

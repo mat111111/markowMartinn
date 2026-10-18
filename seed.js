@@ -10,6 +10,8 @@ const SETTINGS = {
   notifyEmail: '',
   commentsEnabled: true,
   commentsModeration: false,
+  commentsBuyersOnly: true,
+  showCounter: true,
   commentRules:
     'Los comentarios son públicos. Se borran o editan los que incluyan insultos, discriminación, spam, publicidad o datos personales de otras personas.',
   paymentInstructions:
@@ -135,4 +137,27 @@ const BOOKS = [
   },
 ];
 
-module.exports = { SETTINGS, AUTHOR, SOCIALS, RECOMMENDATIONS, BOOKS };
+const FAQ = [
+  {
+    id: 'f1',
+    q: '¿Cuánto tarda el envío?',
+    a: 'Los pedidos salen dentro de las 72 horas hábiles de acreditado el pago. Por correo tardan de 3 a 7 días hábiles según la provincia.',
+  },
+  {
+    id: 'f2',
+    q: '¿Puedo pedir el libro dedicado?',
+    a: 'Sí. Al finalizar la compra, escribí en las notas a nombre de quién querés la dedicatoria.',
+  },
+  {
+    id: 'f3',
+    q: '¿Qué medios de pago aceptan?',
+    a: 'Mercado Pago (tarjeta de crédito, débito o dinero en cuenta) y transferencia bancaria.',
+  },
+  {
+    id: 'f4',
+    q: '¿Hacen presentaciones o talleres?',
+    a: 'Sí, en librerías y bibliotecas. Escribinos desde el formulario y te contamos las próximas fechas.',
+  },
+];
+
+module.exports = { SETTINGS, AUTHOR, SOCIALS, RECOMMENDATIONS, BOOKS, FAQ };

@@ -153,6 +153,13 @@ const state = {
   commentsShown: 10,
   commentFilter: 'todos',
   editingComment: null,
+  draftLayout: null,
+  editingSection: null,
+  pendingSectionImage: null,
+  draftFaq: null,
+  inquiries: [],
+  inquiryFilter: 'nueva',
+  stats: null,
 };
 
 const isAdmin = () => state.me && state.me.role === 'admin';
@@ -214,6 +221,86 @@ function stockChip(b) {
   return '';
 }
 
+function ratingHTML(r, big = false) {
+  if (!r || !r.count) return '';
+  const avg = String(r.avg).replace('.', ',');
+  return `<span class="rating${big ? ' rating--big' : ''}" aria-label="${avg} de 5 estrellas, ${r.count} ${r.count === 1 ? 'opinión' : 'opiniones'}">
+    <span class="rating__stars" style="--r:${Number(r.avg)}" aria-hidden="true">★★★★★</span>${avg}<span class="rating__n">(${r.count})</span></span>`;
+}
+
+// ---------------------------------------------------------------------------
+// Orden de secciones y secciones propias
+// ---------------------------------------------------------------------------
+
+const BUILTIN = {
+  obra: { title: 'Obra', nav: 'Obra', heading: '#obraTitle', type: 'Libros a la venta' },
+  biografia: { title: 'Biografía', nav: 'Biografía', heading: '#bioTitle', type: 'Foto, biografía y datos del autor' },
+  lecturas: { title: 'Lecturas recomendadas', nav: 'Lecturas', heading: '#recTitle', type: 'Libros que recomienda' },
+  comentarios: { title: 'Comentarios', nav: 'Comentarios', heading: '#comTitle', type: 'Comentarios y puntuaciones' },
+  consultas: { title: 'Dudas y consultas', nav: 'Consultas', heading: '#faqTitle', type: 'Preguntas frecuentes y formulario' },
+  redes: { title: 'Redes y contacto', nav: 'Redes', heading: '#socialTitle', type: 'Redes sociales y email' },
+};
+
+function customSectionHTML(sec) {
+  const hasImg = Boolean(sec.imageUrl);
+  return `<div class="wrap">
+    <div class="section__head">
+      <h2 class="section__title">${esc(sec.title)}</h2>
+      ${sec.eyebrow ? `<p class="section__note">${esc(sec.eyebrow)}</p>` : ''}
+      <button class="editbtn" data-editsection="${esc(sec.id)}" ${isAdmin() ? '' : 'hidden'}>Editar sección</button>
+    </div>
+    <div class="custom${hasImg ? '' : ' custom--noimg'}${sec.imageSide === 'izquierda' ? ' custom--left' : ''}">
+      <div class="custom__body">
+        <div class="custom__text">${paragraphs(sec.body)}</div>
+        ${sec.buttonText && sec.buttonUrl ? `<a class="btn" href="${esc(sec.buttonUrl)}" target="_blank" rel="noopener">${esc(sec.buttonText)}</a>` : ''}
+      </div>
+      ${hasImg ? `<div class="custom__media"><img src="${esc(sec.imageUrl)}" alt="" loading="lazy"></div>` : ''}
+    </div>
+  </div>`;
+}
+
+function applyLayout() {
+  const layout = state.site.layout || [];
+  const sections = state.site.sections || [];
+  const main = $('#main');
+  // Secciones propias: se crean o actualizan.
+  $$('section[data-custom]', main).forEach((el) => {
+    if (!sections.some((s) => s.id === el.id)) el.remove();
+  });
+  for (const sec of sections) {
+    let el = document.getElementById(sec.id);
+    if (!el) {
+      el = document.createElement('section');
+      el.className = 'section';
+      el.id = sec.id;
+      el.dataset.custom = '1';
+    }
+    el.innerHTML = customSectionHTML(sec);
+    main.appendChild(el);
+  }
+  // Orden, visibilidad, títulos y franjas alternadas.
+  let i = 0;
+  const nav = [];
+  for (const entry of layout) {
+    const el = document.getElementById(entry.key);
+    if (!el) continue;
+    main.appendChild(el);
+    const b = BUILTIN[entry.key];
+    const sec = sections.find((x) => x.id === entry.key);
+    if (b) {
+      const h = $(b.heading);
+      if (h) h.textContent = entry.title || b.title;
+    }
+    const visible = entry.visible !== false && !el.dataset.empty;
+    el.hidden = !visible;
+    if (!visible) continue;
+    el.classList.toggle('section--band', i % 2 === 1);
+    i++;
+    nav.push({ id: entry.key, label: b ? entry.title && entry.title.length <= 18 ? entry.title : b.nav : sec ? sec.title : entry.key });
+  }
+  $('.mainnav').innerHTML = nav.map((n) => `<a href="#${esc(n.id)}">${esc(n.label)}</a>`).join('');
+}
+
 function renderAll() {
   const { author, settings } = state.site;
   applyAppearance(state.draftAppearance || state.site.appearance);
@@ -231,12 +318,18 @@ function renderAll() {
   renderSocials();
   renderFooter();
   renderCartCount();
+  renderFaq();
+  applyLayout();
   if ($('#adminDialog').open) renderAdmin();
 }
 
 function applyAppearance(a) {
   const tag = $('#appearanceStyle');
-  if (tag && window.SiteTheme) tag.textContent = SiteTheme.css(a);
+  if (!tag || !window.SiteTheme) return;
+  tag.textContent = SiteTheme.css(a);
+  const link = $('#fontsLink');
+  const href = SiteTheme.fontsHref(a);
+  if (link && link.getAttribute('href') !== href) link.setAttribute('href', href);
 }
 
 function renderHeader() {
@@ -307,6 +400,7 @@ function renderShelf() {
         <div class="book__body">
           <p class="book__meta">${meta}</p>
           <h3 class="book__title"><button data-book="${b.id}">${esc(b.title)}</button></h3>
+          ${ratingHTML(b.rating)}
           <div>${stockChip(b)}${isAdmin() && b.featured ? ' <span class="chip chip--accent">Destacado</span>' : ''}</div>
           <div class="book__buy">
             <span class="price">${money(b.price)}</span>
@@ -335,7 +429,8 @@ function renderBio() {
 
 function renderRecs() {
   const recs = state.site.recommendations || [];
-  $('#lecturas').hidden = !recs.length && !isAdmin();
+  if (!recs.length && !isAdmin()) $('#lecturas').dataset.empty = '1';
+  else delete $('#lecturas').dataset.empty;
   $('#recs').innerHTML = recs.length
     ? recs
         .map(
@@ -365,6 +460,19 @@ function renderSocials() {
        <a class="contact__mail" href="mailto:${esc(mail)}">${esc(mail)}</a>
        <button class="linkbtn" data-copy="${esc(mail)}">Copiar email</button>`
     : '';
+}
+
+function renderFaq() {
+  const faq = state.site.faq || [];
+  $('#faqList').innerHTML = faq.length
+    ? faq.map((f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')
+    : '<p class="muted">Todavía no hay preguntas cargadas.</p>';
+  $('.ask__faq').hidden = !faq.length && !isAdmin();
+  const form = $('#inquiryForm');
+  if (form && state.me) {
+    if (!form.elements.name.value) form.elements.name.value = state.me.name;
+    if (!form.elements.email.value) form.elements.email.value = state.me.email;
+  }
 }
 
 function renderFooter() {
@@ -424,7 +532,9 @@ function commentHTML(c, { admin = isAdmin(), ctx = 'p' } = {}) {
     <div class="comment__main">
       <div class="comment__head">
         <span class="comment__name">${esc(c.author)}</span>
+        ${c.rating ? `<span class="rating" aria-label="${c.rating} de 5 estrellas"><span class="rating__stars" style="--r:${c.rating}" aria-hidden="true">★★★★★</span></span>` : ''}
         <span class="comment__meta">${fmtDate(c.createdAt).split(',')[0]}${c.bookTitle ? ` · sobre <em>${esc(c.bookTitle)}</em>` : ''}${admin && c.authorEmail ? ` · ${esc(c.authorEmail)}` : ''}</span>
+        ${c.verified ? '<span class="chip chip--verified">Compró el libro</span>' : ''}
         ${badges.join(' ')}
       </div>
       ${editing
@@ -445,10 +555,26 @@ function commentHTML(c, { admin = isAdmin(), ctx = 'p' } = {}) {
   </li>`;
 }
 
+function composeKey() {
+  const C = state.comments;
+  return [state.me && state.me.id, C.me && C.me.hasPurchase, ((C.me && C.me.purchasedBookIds) || []).join('.'), state.site.books.length].join('|');
+}
+
+function updateRateField() {
+  const sel = $('#cmBook');
+  if (!sel) return;
+  const bought = new Set((state.comments.me && state.comments.me.purchasedBookIds) || []);
+  const can = bought.has(Number(sel.value));
+  $('#cmRateField').hidden = !can;
+  $('#cmRateHint').hidden = can;
+  if (!can) $$('#cmRateField input').forEach((i) => (i.checked = false));
+}
+
 function renderComments() {
   const C = state.comments;
   const section = $('#comentarios');
-  section.hidden = !C.enabled && !isAdmin();
+  if (!C.enabled && !isAdmin()) section.dataset.empty = '1';
+  else delete section.dataset.empty;
   const visible = C.comments.filter((c) => c.status === 'visible');
   $('#comNote').textContent = visible.length
     ? `${visible.length} ${visible.length === 1 ? 'comentario' : 'comentarios'} de lectores`
@@ -464,15 +590,28 @@ function renderComments() {
         <p>Para comentar necesitás una cuenta. Es la misma que se usa para comprar.</p>
         <button class="btn btn--small" data-action="logincomment">Ingresar o crear cuenta</button>
       </div>${rules}`;
-  } else if (!$('#commentForm')) {
+  } else if (C.buyersOnly && !isAdmin() && !(C.me && C.me.hasPurchase)) {
+    compose.innerHTML = `<div class="comments__cta">
+        <p>Podés comentar y puntuar los libros cuando se aprueba tu primera compra.</p>
+        <a class="btn btn--small" href="#obra">Ver los libros</a>
+      </div>${rules}`;
+  } else if (!$('#commentForm') || $('#commentForm').dataset.key !== composeKey()) {
     const books = state.site.books.filter((b) => b.published);
+    const bought = new Set((C.me && C.me.purchasedBookIds) || []);
     compose.innerHTML = `
-      <form class="comments__form" id="commentForm" novalidate>
+      <form class="comments__form" id="commentForm" novalidate data-key="${composeKey()}">
         <div class="field"><label for="cmBody">Tu comentario</label>
           <textarea id="cmBody" name="body" maxlength="1000" placeholder="Escribí lo que quieras compartir…" required></textarea></div>
         <span class="comments__count" id="cmCount">0 / 1000</span>
         <div class="field"><label for="cmBook">Sobre</label>
-          <select id="cmBook" name="bookId"><option value="">Comentario general</option>${books.map((b) => `<option value="${b.id}">${esc(b.title)}</option>`).join('')}</select></div>
+          <select id="cmBook" name="bookId"><option value="">Comentario general</option>${books.map((b) => `<option value="${b.id}">${esc(b.title)}${bought.has(b.id) ? ' · lo compraste' : ''}</option>`).join('')}</select></div>
+        <div class="field" id="cmRateField" hidden>
+          <span class="fieldlabel">Tu puntuación (opcional)</span>
+          <div class="stars-input" role="radiogroup" aria-label="Puntuación de 1 a 5 estrellas">
+            ${[5, 4, 3, 2, 1].map((n) => `<input type="radio" id="cmR${n}" name="rating" value="${n}"><label for="cmR${n}" title="${n} ${n === 1 ? 'estrella' : 'estrellas'}">★</label>`).join('')}
+          </div>
+        </div>
+        <p class="hint" id="cmRateHint">${bought.size ? 'Elegí un libro que compraste para puntuarlo.' : 'Podés puntuar los libros que compres.'}</p>
         <p class="form__error" role="alert"></p>
         <div class="form__actions form__actions--start">
           <button class="btn" type="submit">Publicar</button>
@@ -494,6 +633,8 @@ function renderComments() {
   }
   const rest = shown.length - state.commentsShown;
   $('#comMore').innerHTML = rest > 0 ? `<button class="btn btn--ghost btn--small" data-action="morecomments">Ver ${Math.min(rest, 10)} comentarios más</button>` : '';
+  updateRateField();
+  applyLayout();
 }
 
 function adminComments(el) {
@@ -575,6 +716,7 @@ function openBook(id) {
         <p class="eyebrow">${esc(state.site.author.name)}</p>
         <h2 class="bookdetail__title" id="bookDialogTitle">${esc(b.title)}</h2>
         ${b.subtitle ? `<p class="bookdetail__sub">${esc(b.subtitle)}</p>` : ''}
+        ${b.rating ? `<div>${ratingHTML(b.rating, true)} <a class="linkbtn" href="#comentarios" data-close-book>Ver opiniones</a></div>` : ''}
         <p class="bookdetail__syn">${esc(b.synopsis)}</p>
         <dl class="specs">${specs.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>
         <div class="bookdetail__buy">
@@ -1091,6 +1233,9 @@ function renderAdmin() {
     pedidos: adminOrders,
     usuarios: adminUsers,
     comentarios: adminComments,
+    estadisticas: adminStats,
+    secciones: adminSections,
+    consultas: adminInquiries,
     apariencia: adminAppearance,
     ajustes: adminSettings,
   }[state.adminTab];
@@ -1373,8 +1518,9 @@ function adminSocials(el) {
 }
 
 const drafts = {
-  recs: { get: () => state.draftRecs, blank: () => ({ id: '', title: '', author: '', note: '', link: '' }), key: 'recommendations', render: adminRecs },
-  socials: { get: () => state.draftSocials, blank: () => ({ id: '', network: '', handle: '', url: '' }), key: 'socials', render: adminSocials },
+  recs: { get: () => state.draftRecs, blank: () => ({ id: '', title: '', author: '', note: '', link: '' }), key: 'recommendations', render: () => adminRecs($('#adminContent')) },
+  socials: { get: () => state.draftSocials, blank: () => ({ id: '', network: '', handle: '', url: '' }), key: 'socials', render: () => adminSocials($('#adminContent')) },
+  faq: { get: () => state.draftFaq, blank: () => ({ id: '', q: '', a: '' }), key: 'faq', render: () => renderFaqEditor() },
 };
 
 async function saveRepeat(kind, btn) {
@@ -1384,6 +1530,7 @@ async function saveRepeat(kind, btn) {
   try {
     await api('PUT', `/api/admin/content/${d.key}`, list);
     if (kind === 'recs') state.draftRecs = null;
+    else if (kind === 'faq') state.draftFaq = null;
     else state.draftSocials = null;
     await loadSite();
     toast('Cambios guardados.');
@@ -1515,8 +1662,12 @@ function adminSettings(el) {
         <div class="field"><label for="stFree">Envío gratis desde (ARS)</label><input id="stFree" name="freeShippingFrom" type="number" min="0" step="1000" value="${esc(s.freeShippingFrom)}"><small>Poné 0 para no ofrecer envío gratis.</small></div>
         <div class="field form__full"><label for="stPay">Instrucciones de pago</label><textarea id="stPay" name="paymentInstructions" rows="5">${esc(s.paymentInstructions)}</textarea><small>Se muestran al comprador cuando confirma el pedido y van en su mail de confirmación. Podés poner tu alias, CBU o link de pago.</small></div>
       </div>
+      <fieldset class="fieldset"><legend>Visitas</legend>
+        <label class="check"><input type="checkbox" name="showCounter" ${s.showCounter !== false ? 'checked' : ''}> Mostrar en el pie el total de visitas y las personas en línea</label>
+      </fieldset>
       <fieldset class="fieldset"><legend>Comentarios</legend>
         <label class="check"><input type="checkbox" name="commentsEnabled" ${s.commentsEnabled !== false ? 'checked' : ''}> Permitir comentarios</label>
+        <label class="check"><input type="checkbox" name="commentsBuyersOnly" ${s.commentsBuyersOnly !== false ? 'checked' : ''}> Solo pueden comentar quienes tienen una compra aprobada</label>
         <label class="check"><input type="checkbox" name="commentsModeration" ${s.commentsModeration ? 'checked' : ''}> Revisar cada comentario antes de publicarlo</label>
         <div class="field"><label for="stRules">Normas que se muestran junto al formulario</label><textarea id="stRules" name="commentRules" rows="3" style="min-height:84px">${esc(s.commentRules || '')}</textarea></div>
       </fieldset>
@@ -1601,7 +1752,25 @@ function warningsHTML(a) {
   return w.length ? `<div class="notice" style="margin:0">${w.map(esc).join('<br>')}</div>` : '';
 }
 
+function fontCardsHTML(a) {
+  return SiteTheme.FONTS.map((f) => `<button type="button" class="fontcard" data-font="${f.id}" aria-pressed="${a.font === f.id}">
+      <span class="fontcard__aa" style="font-family:${esc(f.display)}">Aa Bb</span>
+      <span class="fontcard__text" style="font-family:${esc(f.text)}">El tiempo en una casa vacía</span>
+      <span class="fontcard__name" style="font-family:${esc(f.ui)}">${esc(f.name)}</span>
+    </button>`).join('');
+}
+
+function loadAllFonts() {
+  if ($('#allFontsLink')) return;
+  const l = document.createElement('link');
+  l.id = 'allFontsLink';
+  l.rel = 'stylesheet';
+  l.href = SiteTheme.allFontsHref();
+  document.head.appendChild(l);
+}
+
 function adminAppearance(el) {
+  loadAllFonts();
   if (!state.draftAppearance) state.draftAppearance = { ...state.site.appearance };
   const a = state.draftAppearance;
   applyAppearance(a);
@@ -1616,6 +1785,10 @@ function adminAppearance(el) {
           <output id="apScaleVal" for="apScale">${a.fontScale}%</output>
         </div>
         <small class="muted">100% es el tamaño original. Agranda o achica los textos de todo el sitio.</small>
+      </fieldset>
+      <fieldset class="fieldset"><legend>Tipografía</legend>
+        <div class="fontgrid" id="apFonts">${fontCardsHTML(a)}</div>
+        <small class="muted">Cada opción combina una letra para títulos, otra para textos largos y otra para botones y menús.</small>
       </fieldset>
       <fieldset class="fieldset"><legend>Paletas listas</legend>
         <div class="swatches" id="apSwatches">${swatchesHTML(a)}</div>
@@ -1676,6 +1849,273 @@ function discardAppearance() {
   if (!state.draftAppearance) return;
   state.draftAppearance = null;
   applyAppearance(state.site.appearance);
+}
+
+// --- Estadísticas ---
+async function adminStats(el) {
+  el.innerHTML = '<p class="loading">Cargando estadísticas…</p>';
+  try {
+    state.stats = await api('GET', '/api/admin/stats');
+  } catch (err) {
+    el.innerHTML = `<p class="form__error">${esc(err.message)}</p>`;
+    return;
+  }
+  const st = state.stats;
+  const max = Math.max(3, ...st.days.map((d) => d.views));
+  const step = Math.ceil(max / 3);
+  const top = step * 3;
+  const ddmm = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+  const last30 = st.days.reduce((n, d) => n + d.views, 0);
+  el.innerHTML = `
+    <p class="panel__intro">Una visita es una sesión: si la misma persona recarga la página en menos de 30 minutos, no se cuenta de nuevo. Tus propias visitas como administrador no se cuentan.</p>
+    <dl class="stats">
+      <div class="stat"><dt>En línea ahora</dt><dd><span class="livedot" aria-hidden="true"></span> ${numFmt.format(st.online)}</dd></div>
+      <div class="stat"><dt>Visitas hoy</dt><dd>${numFmt.format(st.today.views)}</dd></div>
+      <div class="stat"><dt>Visitantes hoy</dt><dd>${numFmt.format(st.today.uniques)}</dd></div>
+      <div class="stat"><dt>Visitas totales</dt><dd>${numFmt.format(st.total)}</dd></div>
+    </dl>
+    <div class="panel__bar"><h3 class="panel__h">Visitas por día · últimos 30 días</h3><span class="muted" style="font-size:.85rem">${numFmt.format(last30)} en total</span></div>
+    <div class="vchart" id="vchart">
+      <div class="vchart__y" aria-hidden="true"><span>${top}</span><span>${step * 2}</span><span>${step}</span><span>0</span></div>
+      <div class="vchart__plot" role="list" aria-label="Visitas por día">
+        <div class="vchart__grid" aria-hidden="true"></div>
+        ${st.days
+          .map(
+            (d, i) => `<div class="vchart__bar" role="listitem" tabindex="0" data-i="${i}" aria-label="${ddmm(d.day)}: ${d.views} visitas, ${d.uniques} visitantes">
+            <i style="height:${(d.views / top) * 100}%"></i></div>`
+          )
+          .join('')}
+      </div>
+      <div class="vchart__x" aria-hidden="true">${st.days.map((d, i) => `<span>${i % 5 === 4 || i === 0 ? ddmm(d.day) : ''}</span>`).join('')}</div>
+    </div>
+    <details style="margin-top:var(--s-5)"><summary class="linkbtn">Ver los números en una tabla</summary>
+      <div class="tablewrap" style="margin-top:var(--s-3)"><table class="table" style="min-width:0">
+        <thead><tr><th>Día</th><th class="num">Visitas</th><th class="num">Visitantes</th></tr></thead>
+        <tbody>${[...st.days].reverse().map((d) => `<tr><td>${ddmm(d.day)}</td><td class="num">${d.views}</td><td class="num">${d.uniques}</td></tr>`).join('')}</tbody>
+      </table></div>
+    </details>
+    <div class="form__actions form__actions--start" style="margin-top:var(--s-5)"><button class="btn btn--small btn--ghost" data-admintab="estadisticas">Actualizar</button></div>`;
+}
+
+function showChartTip(bar) {
+  const st = state.stats;
+  const chart = $('#vchart');
+  if (!st || !chart || !bar) return;
+  const d = st.days[Number(bar.dataset.i)];
+  let tip = $('.vchart__tip', chart);
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.className = 'vchart__tip';
+    chart.appendChild(tip);
+  }
+  tip.innerHTML = `<strong>${d.day.slice(8, 10)}/${d.day.slice(5, 7)}</strong><br>${d.views} ${d.views === 1 ? 'visita' : 'visitas'} · ${d.uniques} ${d.uniques === 1 ? 'visitante' : 'visitantes'}`;
+  const cr = chart.getBoundingClientRect();
+  const br = bar.getBoundingClientRect();
+  const fill = bar.querySelector('i').getBoundingClientRect();
+  const x = Math.min(Math.max(br.left + br.width / 2 - cr.left, 70), cr.width - 70);
+  tip.style.left = `${x}px`;
+  tip.style.top = `${Math.min(fill.top, br.bottom - 4) - cr.top}px`;
+  tip.hidden = false;
+}
+
+// --- Secciones ---
+function adminSections(el) {
+  if (state.editingSection) return adminSectionForm(el);
+  if (!state.draftLayout) state.draftLayout = structuredClone(state.site.layout || []);
+  const L = state.draftLayout;
+  const sections = state.site.sections || [];
+  el.innerHTML = `
+    <p class="panel__intro">Ordená las secciones de arriba hacia abajo, ocultá las que no uses y cambiales el nombre. La portada siempre va primero. El menú se arma solo con las secciones visibles.</p>
+    <ol class="layoutlist">
+      ${L.map((e, i) => {
+        const b = BUILTIN[e.key];
+        const sec = sections.find((x) => x.id === e.key);
+        return `<li class="layoutrow${e.visible === false ? ' is-off' : ''}">
+          <div class="iconbtns">
+            <button type="button" class="iconbtn" data-lmove="${i}" data-dir="-1" aria-label="Subir" ${i === 0 ? 'disabled' : ''}>↑</button>
+            <button type="button" class="iconbtn" data-lmove="${i}" data-dir="1" aria-label="Bajar" ${i === L.length - 1 ? 'disabled' : ''}>↓</button>
+          </div>
+          <div class="layoutrow__main">
+            ${b
+              ? `<input value="${esc(e.title)}" placeholder="${esc(b.title)}" data-ltitle="${i}" aria-label="Título de la sección ${esc(b.title)}">`
+              : `<span class="layoutrow__fixed">${esc(sec ? sec.title : e.key)}</span>`}
+            <span class="layoutrow__type">${b ? esc(b.type) : 'Sección propia'}</span>
+          </div>
+          <div class="layoutrow__side">
+            <label class="check"><input type="checkbox" data-lvisible="${i}" ${e.visible !== false ? 'checked' : ''}> Visible</label>
+            ${sec ? `<button type="button" class="btn btn--small btn--ghost" data-editsection="${esc(sec.id)}">Editar</button>` : ''}
+          </div>
+        </li>`;
+      }).join('')}
+    </ol>
+    <p class="form__error" role="alert" id="layoutError"></p>
+    <div class="form__actions" style="justify-content:space-between">
+      <button type="button" class="btn btn--small btn--ghost" data-action="newsection" ${sections.length >= 12 ? 'disabled' : ''}>Agregar sección</button>
+      <button type="button" class="btn" data-action="savelayout">Guardar orden</button>
+    </div>`;
+}
+
+function adminSectionForm(el) {
+  const isNew = state.editingSection === 'new';
+  const sec = isNew
+    ? { id: '', title: '', eyebrow: '', body: '', imageSide: 'derecha', buttonText: '', buttonUrl: '', imageUrl: '' }
+    : (state.site.sections || []).find((x) => x.id === state.editingSection);
+  if (!sec) {
+    state.editingSection = null;
+    return adminSections(el);
+  }
+  const img = state.pendingSectionImage !== null ? state.pendingSectionImage : sec.imageUrl;
+  el.innerHTML = `
+    <div class="panel__bar">
+      <button class="linkbtn" data-action="backsections">← Volver a las secciones</button>
+      ${!isNew ? `<button class="linkbtn linkbtn--danger" data-deletesection="${esc(sec.id)}">Borrar sección</button>` : ''}
+    </div>
+    <form class="form" id="sectionForm" novalidate>
+      <div class="form__grid">
+        <div class="field"><label for="scTitle">Título</label><input id="scTitle" name="title" value="${esc(sec.title)}" maxlength="80" required></div>
+        <div class="field"><label for="scEyebrow">Bajada (opcional)</label><input id="scEyebrow" name="eyebrow" value="${esc(sec.eyebrow)}" maxlength="60" placeholder="Una línea junto al título"></div>
+        <div class="field form__full"><label for="scBody">Texto</label><textarea id="scBody" name="body" rows="9">${esc(sec.body)}</textarea><small>Dejá una línea en blanco entre párrafos.</small></div>
+        <div class="field"><label for="scBtnText">Texto del botón (opcional)</label><input id="scBtnText" name="buttonText" value="${esc(sec.buttonText)}" maxlength="40" placeholder="Ej.: Inscribirme al taller"></div>
+        <div class="field"><label for="scBtnUrl">Enlace del botón</label><input id="scBtnUrl" name="buttonUrl" value="${esc(sec.buttonUrl)}" placeholder="https://"></div>
+      </div>
+      <div class="field"><span class="fieldlabel">Imagen (opcional)</span>
+        <div class="imgpick">
+          <div class="imgpick__thumb">${img ? `<img src="${esc(img)}" alt="">` : 'Sin imagen'}</div>
+          <div class="form__actions form__actions--start">
+            <span class="btn btn--small btn--ghost filebtn">Subir imagen<input type="file" accept="image/png,image/jpeg,image/webp" data-upload="section" aria-label="Subir imagen"></span>
+            ${img ? '<button type="button" class="linkbtn linkbtn--danger" data-action="removesectionimg">Quitar</button>' : ''}
+          </div>
+        </div>
+      </div>
+      <div class="field"><label for="scSide">Posición de la imagen</label>
+        <select id="scSide" name="imageSide"><option value="derecha" ${sec.imageSide !== 'izquierda' ? 'selected' : ''}>A la derecha del texto</option><option value="izquierda" ${sec.imageSide === 'izquierda' ? 'selected' : ''}>A la izquierda del texto</option></select></div>
+      <p class="form__error" role="alert"></p>
+      <div class="form__actions">
+        <button type="button" class="btn btn--ghost" data-action="backsections">Cancelar</button>
+        <button class="btn" type="submit">${isNew ? 'Crear sección' : 'Guardar sección'}</button>
+      </div>
+    </form>`;
+}
+
+async function saveSection(form) {
+  const d = formData(form);
+  const list = (state.site.sections || []).map((x) => ({ ...x, image: undefined }));
+  const item = {
+    id: state.editingSection === 'new' ? '' : state.editingSection,
+    title: d.title,
+    eyebrow: d.eyebrow,
+    body: d.body,
+    imageSide: d.imageSide,
+    buttonText: d.buttonText,
+    buttonUrl: d.buttonUrl,
+  };
+  if (state.pendingSectionImage !== null) item.image = state.pendingSectionImage;
+  if (state.editingSection === 'new') list.push(item);
+  else list[list.findIndex((x) => x.id === state.editingSection)] = item;
+  // Las que no se tocan conservan su imagen (el servidor la mantiene si no viene una nueva).
+  const ok = await adminSave(form, () => api('PUT', '/api/admin/content/sections', list), 'Sección guardada.', false);
+  if (ok) {
+    state.editingSection = null;
+    state.pendingSectionImage = null;
+    state.draftLayout = null;
+    renderAdmin();
+  }
+}
+
+// --- Consultas ---
+async function loadInquiries() {
+  const { inquiries } = await api('GET', '/api/admin/inquiries');
+  state.inquiries = inquiries;
+  const n = inquiries.filter((q) => q.status === 'nueva').length;
+  const c = $('#inquiryCount');
+  c.textContent = n;
+  c.hidden = !n;
+}
+
+function inquiryHTML(q) {
+  const mailOk = state.site.mail?.configured;
+  return `<article class="inquiry">
+    <div class="order__head">
+      <div><strong>${esc(q.name)}</strong> <span class="order__date">· ${esc(q.email)} · ${fmtDate(q.createdAt)}</span></div>
+      <span class="chip ${q.status === 'nueva' ? 'chip--low' : q.status === 'respondida' ? 'chip--ok' : 'chip--hidden'}">${esc(q.status)}</span>
+    </div>
+    <p class="inquiry__msg">${esc(q.message)}</p>
+    ${q.reply ? `<p class="inquiry__reply"><strong>Tu respuesta (${fmtDate(q.repliedAt).split(',')[0]}):</strong><br>${esc(q.reply)}</p>` : ''}
+    ${q.status !== 'archivada'
+      ? `<form class="form" data-replyform="${q.id}" novalidate>
+          <label class="sr" for="rp-${q.id}">Respuesta</label>
+          <textarea id="rp-${q.id}" name="reply" placeholder="${mailOk ? 'Escribí la respuesta. Se envía por mail a ' + esc(q.email) : 'Activá los mails para responder desde acá, o escribile a ' + esc(q.email)}" ${mailOk ? '' : 'disabled'}></textarea>
+          <p class="form__error" role="alert"></p>
+          <div class="form__actions" style="justify-content:space-between">
+            <div class="form__actions form__actions--start" style="padding:0">
+              <button type="button" class="linkbtn" data-inqstatus="${q.id}" data-to="archivada">Archivar</button>
+              ${q.status === 'nueva' ? `<button type="button" class="linkbtn" data-inqstatus="${q.id}" data-to="respondida">Marcar como respondida</button>` : ''}
+              <button type="button" class="linkbtn" data-copy="${esc(q.email)}">Copiar email</button>
+              <button type="button" class="linkbtn linkbtn--danger" data-deleteinq="${q.id}">Borrar</button>
+            </div>
+            <button class="btn btn--small" type="submit" ${mailOk ? '' : 'disabled'}>${q.reply ? 'Enviar otra respuesta' : 'Responder por mail'}</button>
+          </div>
+        </form>`
+      : `<div class="form__actions form__actions--start"><button type="button" class="linkbtn" data-inqstatus="${q.id}" data-to="nueva">Volver a la bandeja</button><button type="button" class="linkbtn linkbtn--danger" data-deleteinq="${q.id}">Borrar</button></div>`}
+  </article>`;
+}
+
+function renderInquiryList() {
+  const box = $('#inquiryList');
+  if (!box) return;
+  const all = state.inquiries;
+  const count = (st) => all.filter((q) => q.status === st).length;
+  const shown = state.inquiryFilter === 'todas' ? all : all.filter((q) => q.status === state.inquiryFilter);
+  box.innerHTML = `
+    <div class="filterbar" role="group" aria-label="Filtrar consultas">
+      ${[['nueva', 'Nuevas'], ['respondida', 'Respondidas'], ['archivada', 'Archivadas'], ['todas', 'Todas']]
+        .map(([k, label]) => `<button class="filter" data-inqfilter="${k}" aria-pressed="${state.inquiryFilter === k}">${label}${k !== 'todas' && count(k) ? ` · ${count(k)}` : ''}</button>`)
+        .join('')}
+    </div>
+    ${shown.length ? `<div class="orders">${shown.map(inquiryHTML).join('')}</div>` : '<div class="empty">No hay consultas en esta bandeja.</div>'}`;
+}
+
+function renderFaqEditor() {
+  const box = $('#faqEditor');
+  if (!box) return;
+  if (!state.draftFaq) state.draftFaq = structuredClone(state.site.faq || []);
+  repeatEditor(box, {
+    list: state.draftFaq,
+    kind: 'faq',
+    title: 'Pregunta',
+    addLabel: 'Agregar pregunta',
+    intro: 'Se muestran en la sección “Dudas y consultas”, en este orden.',
+    fields: [
+      { key: 'q', label: 'Pregunta', full: true },
+      { key: 'a', label: 'Respuesta', textarea: true, full: true },
+    ],
+  });
+}
+
+async function adminInquiries(el) {
+  el.innerHTML = `
+    <p class="panel__intro">Las consultas llegan desde el formulario de la sección “Dudas y consultas”. También te llega un mail por cada una, que podés responder desde tu correo.</p>
+    <div id="inquiryList"><p class="loading">Cargando consultas…</p></div>
+    <h3 class="panel__h" style="margin:var(--s-7) 0 var(--s-3)">Preguntas frecuentes</h3>
+    <div id="faqEditor"></div>`;
+  renderFaqEditor();
+  try {
+    await loadInquiries();
+    renderInquiryList();
+  } catch (err) {
+    $('#inquiryList').innerHTML = `<p class="form__error">${esc(err.message)}</p>`;
+  }
+}
+
+async function inquiryAction(fn, okMsg) {
+  try {
+    await fn();
+    if (okMsg) toast(okMsg);
+    await loadInquiries();
+    renderInquiryList();
+  } catch (err) {
+    toast(err.message, true);
+  }
 }
 
 async function adminSave(form, fn, okMsg, rerender = true) {
@@ -1749,6 +2189,9 @@ document.addEventListener('click', async (e) => {
   }
   if (ds.admintab) {
     discardAppearance();
+    state.editingSection = null;
+    state.draftLayout = null;
+    state.draftFaq = null;
     state.adminTab = ds.admintab;
     state.editingBook = null;
     state.pendingCover = null;
@@ -1822,7 +2265,7 @@ document.addEventListener('click', async (e) => {
   if (ds.additem) {
     const d = drafts[ds.additem];
     d.get().push(d.blank());
-    d.render($('#adminContent'));
+    d.render();
     const items = $$('.repeat__item');
     items[items.length - 1]?.querySelector('input, textarea')?.focus();
     return;
@@ -1833,13 +2276,64 @@ document.addEventListener('click', async (e) => {
     const j = i + Number(ds.dir);
     if (j < 0 || j >= list.length) return;
     [list[i], list[j]] = [list[j], list[i]];
-    return drafts[ds.move].render($('#adminContent'));
+    return drafts[ds.move].render();
   }
   if (ds.remove) {
     drafts[ds.remove].get().splice(Number(ds.idx), 1);
-    return drafts[ds.remove].render($('#adminContent'));
+    return drafts[ds.remove].render();
   }
   if (ds.saverepeat) return saveRepeat(ds.saverepeat, el);
+  if ('closeBook' in ds) return closeDialog('bookDialog');
+  if (ds.editsection) {
+    if (!$('#adminDialog').open) {
+      openAdmin('secciones');
+    }
+    state.editingSection = ds.editsection;
+    state.pendingSectionImage = null;
+    return renderAdmin();
+  }
+  if (ds.deletesection) {
+    const sec = (state.site.sections || []).find((x) => x.id === ds.deletesection);
+    if (!sec || !(await confirmAction(`¿Borrar la sección “${sec.title}”? No se puede deshacer.`))) return;
+    const list = state.site.sections.filter((x) => x.id !== sec.id).map((x) => ({ ...x, image: undefined }));
+    try {
+      await api('PUT', '/api/admin/content/sections', list);
+      state.editingSection = null;
+      state.draftLayout = null;
+      await loadSite();
+      renderAdmin();
+      toast('Sección borrada.');
+    } catch (err) {
+      toast(err.message, true);
+    }
+    return;
+  }
+  if (ds.lmove) {
+    const L = state.draftLayout;
+    const i = Number(ds.lmove);
+    const j = i + Number(ds.dir);
+    if (!L || j < 0 || j >= L.length) return;
+    [L[i], L[j]] = [L[j], L[i]];
+    return adminSections($('#adminContent'));
+  }
+  if (ds.inqfilter) {
+    state.inquiryFilter = ds.inqfilter;
+    return renderInquiryList();
+  }
+  if (ds.inqstatus) {
+    const labels = { archivada: 'Consulta archivada.', respondida: 'Marcada como respondida.', nueva: 'Consulta de vuelta en la bandeja.' };
+    return inquiryAction(() => api('PUT', `/api/admin/inquiries/${ds.inqstatus}`, { status: ds.to }), labels[ds.to]);
+  }
+  if (ds.deleteinq) {
+    if (!(await confirmAction('¿Borrar esta consulta? No se puede deshacer.'))) return;
+    return inquiryAction(() => api('DELETE', `/api/admin/inquiries/${ds.deleteinq}`), 'Consulta borrada.');
+  }
+  if (ds.font && state.draftAppearance) {
+    state.draftAppearance.font = ds.font;
+    applyAppearance(state.draftAppearance);
+    $('#apFonts').innerHTML = fontCardsHTML(state.draftAppearance);
+    return;
+  }
   if (ds.preset) {
     const p = SiteTheme.PRESETS.find((x) => x.id === ds.preset);
     const a = state.draftAppearance;
@@ -1889,6 +2383,37 @@ document.addEventListener('click', async (e) => {
     case 'removephoto':
       state.pendingPhoto = '';
       return adminAuthor($('#adminContent'));
+    case 'newsection':
+      state.editingSection = 'new';
+      state.pendingSectionImage = null;
+      return renderAdmin();
+    case 'backsections':
+      state.editingSection = null;
+      state.pendingSectionImage = null;
+      return renderAdmin();
+    case 'removesectionimg': {
+      state.pendingSectionImage = '';
+      const f = $('#sectionForm');
+      const vals = formData(f);
+      adminSectionForm($('#adminContent'));
+      Object.entries(vals).forEach(([k, v]) => {
+        if ($('#sectionForm').elements[k]) $('#sectionForm').elements[k].value = v;
+      });
+      return;
+    }
+    case 'savelayout': {
+      setBusy(el, true);
+      try {
+        await api('PUT', '/api/admin/content/layout', state.draftLayout);
+        state.draftLayout = null;
+        await loadSite();
+        toast('Orden guardado.');
+      } catch (err) {
+        $('#layoutError').textContent = err.message;
+        setBusy(el, false);
+      }
+      return;
+    }
     case 'logincomment':
       return openAuth('login', 'Ingresá o creá tu cuenta para comentar.');
     case 'morecomments':
@@ -1936,6 +2461,7 @@ document.addEventListener('input', (e) => {
   if (t.form && t.form.id === 'bookForm' && ['title', 'publisher', 'genre', 'coverColor'].includes(t.name)) renderBookPreview();
   if (t.form && t.form.id === 'appearanceForm') readAppearanceForm(t.form, t);
   if (t.id === 'cmBody') $('#cmCount').textContent = `${t.value.length} / 1000`;
+  if (t.dataset.ltitle !== undefined && state.draftLayout) state.draftLayout[Number(t.dataset.ltitle)].title = t.value;
 });
 
 document.addEventListener('change', async (e) => {
@@ -1943,6 +2469,12 @@ document.addEventListener('change', async (e) => {
   if (t.form && t.form.id === 'checkoutForm' && (t.name === 'method' || t.name === 'payment')) return renderCheckoutTotals();
   if (t.form && t.form.id === 'appearanceForm' && t.name === 'custom') return readAppearanceForm(t.form, t);
   if (t.dataset.orderstatus) return changeOrderStatus(t);
+  if (t.id === 'cmBook') return updateRateField();
+  if (t.dataset.lvisible !== undefined && state.draftLayout) {
+    state.draftLayout[Number(t.dataset.lvisible)].visible = t.checked;
+    t.closest('.layoutrow').classList.toggle('is-off', !t.checked);
+    return;
+  }
   if (t.dataset.userrole) {
     try {
       await api('PUT', `/api/admin/users/${t.dataset.userrole}`, { role: t.value });
@@ -1957,6 +2489,15 @@ document.addEventListener('change', async (e) => {
     const file = t.files && t.files[0];
     if (!file) return;
     try {
+      if (t.dataset.upload === 'section') {
+        state.pendingSectionImage = await fileToDataUrl(file, 1400, 1400);
+        const vals = formData($('#sectionForm'));
+        adminSectionForm($('#adminContent'));
+        Object.entries(vals).forEach(([k, v]) => {
+          if ($('#sectionForm').elements[k]) $('#sectionForm').elements[k].value = v;
+        });
+        return;
+      }
       if (t.dataset.upload === 'cover') {
         state.pendingCover = await fileToDataUrl(file, 700, 1050);
         renderBookPreview();
@@ -1984,6 +2525,16 @@ document.addEventListener('submit', async (e) => {
   if (err) err.textContent = '';
   const btn = $('button[type=submit]', form);
 
+  if (form.dataset.replyform) {
+    const id = form.dataset.replyform;
+    const reply = formData(form).reply.trim();
+    if (!reply) {
+      $('.form__error', form).textContent = 'Escribí la respuesta antes de enviarla.';
+      return;
+    }
+    setBusy($('button[type=submit]', form), true, 'Enviando…');
+    return inquiryAction(() => api('POST', `/api/admin/inquiries/${id}/reply`, { reply }), 'Respuesta enviada por mail.');
+  }
   if (form.dataset.commentform) {
     const id = form.dataset.commentform;
     const body = formData(form).body;
@@ -2047,6 +2598,7 @@ document.addEventListener('submit', async (e) => {
         state.me = res.me;
         await loadSite();
         await loadAdminOrders().catch(() => {});
+        loadInquiries().catch(() => {});
         toast('Entraste como administrador.');
         return openAdmin('autor');
       }
@@ -2074,12 +2626,23 @@ document.addEventListener('submit', async (e) => {
       }
       case 'checkoutForm':
         return submitCheckout(form);
+      case 'inquiryForm': {
+        setBusy(btn, true, 'Enviando…');
+        await api('POST', '/api/inquiries', formData(form));
+        setBusy(btn, false);
+        $('#inquiryBox').innerHTML = `<div class="sentbox"><p class="sentbox__title">¡Gracias!</p>
+          <p>Recibimos tu consulta. Te respondemos a <strong>${esc(formData(form).email)}</strong> lo antes posible.</p></div>`;
+        return;
+      }
+      case 'sectionForm':
+        return saveSection(form);
       case 'commentForm': {
         setBusy(btn, true, 'Publicando…');
         const d = formData(form);
-        const { comment } = await api('POST', '/api/comments', { body: d.body, bookId: d.bookId || null });
+        const { comment } = await api('POST', '/api/comments', { body: d.body, bookId: d.bookId || null, rating: d.rating || null });
         form.reset();
         $('#cmCount').textContent = '0 / 1000';
+        updateRateField();
         setBusy(btn, false);
         toast(comment.status === 'pendiente' ? 'Recibimos tu comentario. Se publica cuando lo revisemos.' : 'Comentario publicado.');
         return loadComments();
@@ -2115,6 +2678,17 @@ document.addEventListener('submit', async (e) => {
   }
 });
 
+// Tooltip del gráfico de visitas (mouse y teclado).
+document.addEventListener('mouseover', (e) => {
+  const bar = e.target.closest && e.target.closest('.vchart__bar');
+  if (bar) showChartTip(bar);
+  else if (!e.target.closest || !e.target.closest('.vchart')) $('.vchart__tip')?.setAttribute('hidden', '');
+});
+document.addEventListener('focusin', (e) => {
+  const bar = e.target.closest && e.target.closest('.vchart__bar');
+  if (bar) showChartTip(bar);
+});
+
 // Cerrar el panel sin guardar deshace la vista previa de apariencia.
 $('#adminDialog').addEventListener('close', discardAppearance);
 
@@ -2125,12 +2699,50 @@ $('#confirmDialog').addEventListener('close', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Visitas y personas en línea
+// ---------------------------------------------------------------------------
+
+function visitorId() {
+  try {
+    let id = localStorage.getItem('vid');
+    if (!id) {
+      id = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36)).replace(/[^A-Za-z0-9-]/g, '');
+      localStorage.setItem('vid', id);
+    }
+    return id;
+  } catch {
+    window.__vid = window.__vid || Math.random().toString(36).slice(2) + Date.now().toString(36);
+    return window.__vid;
+  }
+}
+
+const numFmt = new Intl.NumberFormat('es-AR');
+async function ping(view = false) {
+  if (document.visibilityState !== 'visible') return;
+  try {
+    const r = await api('POST', '/api/ping', { vid: visitorId(), view });
+    const el = $('#visitCounter');
+    if (r.show && r.total !== undefined) {
+      el.innerHTML = `<span>${numFmt.format(r.total)} ${r.total === 1 ? 'visita' : 'visitas'}</span><span aria-hidden="true">·</span><span class="livedot" aria-hidden="true"></span><span>${numFmt.format(Math.max(1, r.online))} ${Math.max(1, r.online) === 1 ? 'persona' : 'personas'} en línea ahora</span>`;
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+    }
+  } catch {
+    /* las estadísticas nunca deben romper la página */
+  }
+}
+setInterval(() => ping(false), 30000);
+document.addEventListener('visibilitychange', () => ping(false));
+
+// ---------------------------------------------------------------------------
 // Inicio
 // ---------------------------------------------------------------------------
 
 loadCart();
 loadSite()
   .then(() => {
+    ping(true);
     if (location.pathname === '/pago') handlePaymentReturn();
     if (location.pathname === '/restablecer') {
       const t = new URLSearchParams(location.search).get('t');
@@ -2141,6 +2753,7 @@ loadSite()
         /* sin historial */
       }
     }
+    if (isAdmin()) loadInquiries().catch(() => {});
     return isAdmin() ? loadAdminOrders().catch(() => {}) : null;
   })
   .catch((e) => {

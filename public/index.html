@@ -7,7 +7,7 @@
   <meta name="description" content="Sitio oficial: libros, biografía, lecturas recomendadas y tienda.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..700;1,6..96,400..600&family=Literata:ital,opsz,wght@0,7..72,400..600;1,7..72,400&family=Schibsted+Grotesk:wght@400..700&display=swap">
+  <link id="fontsLink" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..700;1,6..96,400..600&family=Literata:ital,opsz,wght@0,7..72,400..600;1,7..72,400&family=Schibsted+Grotesk:wght@400..700&display=swap">
   <link rel="stylesheet" href="/styles.css">
   <style id="appearanceStyle"></style>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2314181F'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' fill='%23F3F4F1' text-anchor='middle' font-style='italic'%3EA%3C/text%3E%3C/svg%3E">
@@ -121,6 +121,35 @@
       </div>
     </section>
 
+    <section class="section" id="consultas" aria-labelledby="faqTitle">
+      <div class="wrap">
+        <div class="section__head">
+          <h2 class="section__title" id="faqTitle">Dudas y consultas</h2>
+          <p class="section__note">Respuestas rápidas, y un formulario para todo lo demás.</p>
+          <button class="editbtn" data-panel="consultas" hidden>Editar preguntas</button>
+        </div>
+        <div class="ask">
+          <div class="ask__faq">
+            <h3 class="ask__h">Preguntas frecuentes</h3>
+            <div class="faq" id="faqList"></div>
+          </div>
+          <div class="ask__form" id="inquiryBox">
+            <h3 class="ask__h">Escribinos</h3>
+            <form class="form" id="inquiryForm" novalidate>
+              <div class="form__grid">
+                <div class="field"><label for="iqName">Nombre</label><input id="iqName" name="name" autocomplete="name" required></div>
+                <div class="field"><label for="iqEmail">Email</label><input id="iqEmail" name="email" type="email" autocomplete="email" required></div>
+                <div class="field form__full"><label for="iqMsg">Tu consulta</label><textarea id="iqMsg" name="message" rows="5" maxlength="3000" required></textarea></div>
+              </div>
+              <div class="hp" aria-hidden="true"><label for="iqWeb">No completar</label><input id="iqWeb" name="website" tabindex="-1" autocomplete="off"></div>
+              <p class="form__error" role="alert"></p>
+              <div class="form__actions form__actions--start"><button class="btn" type="submit">Enviar consulta</button><span class="muted" style="font-size:.85rem">Te respondemos por mail.</span></div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="section" id="redes" aria-labelledby="socialTitle">
       <div class="wrap">
         <div class="section__head">
@@ -138,6 +167,7 @@
       <div class="footer__colophon">
         <p class="footer__name" id="footerName">Marina Aldao</p>
         <p class="footer__meta" id="footerMeta"></p>
+        <p class="footer__counter" id="visitCounter" hidden></p>
       </div>
       <div class="footer__ship" id="footerShip"></div>
       <div class="adminlogin" id="adminLogin">
@@ -262,12 +292,15 @@
       <button class="modal__close modal__close--static" data-close aria-label="Cerrar">×</button>
     </div>
     <div class="admintabs" role="tablist" id="adminTabs">
+      <button class="tab" role="tab" data-admintab="estadisticas">Estadísticas</button>
+      <button class="tab" role="tab" data-admintab="secciones">Secciones</button>
       <button class="tab" role="tab" data-admintab="autor">Autor</button>
       <button class="tab" role="tab" data-admintab="libros">Libros</button>
       <button class="tab" role="tab" data-admintab="recomendaciones">Lecturas</button>
       <button class="tab" role="tab" data-admintab="redes">Redes</button>
       <button class="tab" role="tab" data-admintab="pedidos">Pedidos</button>
       <button class="tab" role="tab" data-admintab="comentarios">Comentarios</button>
+      <button class="tab" role="tab" data-admintab="consultas">Consultas <span class="count count--tab" id="inquiryCount" hidden></span></button>
       <button class="tab" role="tab" data-admintab="usuarios">Usuarios</button>
       <button class="tab" role="tab" data-admintab="apariencia">Apariencia</button>
       <button class="tab" role="tab" data-admintab="ajustes">Ajustes</button>

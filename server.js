@@ -18,7 +18,19 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
 const SESSION_DAYS = 30;
 const RESET_MINUTES = 60;
 const ORDER_STATUSES = ['pendiente', 'pagado', 'enviado', 'entregado', 'cancelado'];
-const CONTENT_KEYS = ['settings', 'author', 'socials', 'recommendations', 'appearance'];
+const CONTENT_KEYS = ['settings', 'author', 'socials', 'recommendations', 'appearance', 'layout', 'sections', 'faq'];
+const PAID_STATUSES = ['pagado', 'enviado', 'entregado'];
+
+// Secciones fijas del sitio (la portada siempre va primero). Título y texto del menú por defecto.
+const BUILTIN_SECTIONS = {
+  obra: { title: 'Obra', nav: 'Obra' },
+  biografia: { title: 'Biografía', nav: 'Biografía' },
+  lecturas: { title: 'Lecturas recomendadas', nav: 'Lecturas' },
+  comentarios: { title: 'Comentarios', nav: 'Comentarios' },
+  consultas: { title: 'Dudas y consultas', nav: 'Consultas' },
+  redes: { title: 'Redes y contacto', nav: 'Redes' },
+};
+const DEFAULT_ORDER = ['obra', 'biografia', 'lecturas', 'comentarios', 'consultas', 'redes'];
 
 // Guarda los últimos 40 envíos de mail para verlos desde el panel (Ajustes).
 let mailLogQueue = Promise.resolve();
@@ -273,6 +285,7 @@ app.get(
     );
     const author = (await getContent('author')) || {};
     const authorRow = await db.get("SELECT updated_at FROM content WHERE key = 'author'");
+    const ratings = await bookRatings();
     res.json({
       settings: (await getContent('settings')) || {},
       author: {
@@ -283,7 +296,10 @@ app.get(
       socials: (await getContent('socials')) || [],
       recommendations: (await getContent('recommendations')) || [],
       appearance: theme.normalize(await getContent('appearance')),
-      books: books.map(bookOut),
+      layout: await currentLayout(),
+      sections: sectionsOut(await getContent('sections')),
+      faq: (await getContent('faq')) || [],
+      books: books.map((b) => ({ ...bookOut(b), rating: ratings[b.id] || null })),
       me: publicUser(req.user),
       payments: { mercadopago: payments.mpEnabled() },
       ...(isAdmin ? { mail: mailer.mailStatus(), mpMode: payments.mpMode() } : {}),
@@ -304,6 +320,15 @@ app.get(
   wrap(async (req, res) => {
     const row = await db.get('SELECT cover_image FROM books WHERE id = ?', [Number(req.params.id) || 0]);
     sendDataUrl(res, row && row.cover_image);
+  })
+);
+
+app.get(
+  '/media/section/:id',
+  wrap(async (req, res) => {
+    const list = (await getContent('sections')) || [];
+    const sec = list.find((s) => s.id === req.params.id);
+    sendDataUrl(res, sec && sec.image);
   })
 );
 
@@ -817,6 +842,170 @@ async function notifyOrder(orderRow, url) {
   return result;
 }
 
+// ---------- orden de secciones ----------
+
+function sectionsOut(list) {
+  return (list || []).map((s) => ({
+    ...s,
+    image: undefined,
+    imageUrl: s.image ? `/media/section/${s.id}?v=${encodeURIComponent(s.updated || '')}` : '',
+  }));
+}
+
+// Devuelve el orden guardado, completado con las secciones que falten.
+async function currentLayout() {
+  const saved = (await getContent('layout')) || [];
+  const custom = ((await getContent('sections')) || []).map((s) => s.id);
+  const valid = (k) => Boolean(BUILTIN_SECTIONS[k]) || custom.includes(k);
+  const out = [];
+  const seen = new Set();
+  for (const e of saved) {
+    if (valid(e.key) && !seen.has(e.key)) {
+      seen.add(e.key);
+      out.push({ key: e.key, visible: e.visible !== false, title: e.title || '' });
+    }
+  }
+  for (const k of DEFAULT_ORDER) {
+    if (seen.has(k)) continue;
+    // Una sección fija nueva entra antes de "redes" si existe.
+    const i = out.findIndex((e) => e.key === 'redes');
+    const entry = { key: k, visible: true, title: '' };
+    if (i >= 0 && k !== 'redes') out.splice(i, 0, entry);
+    else out.push(entry);
+    seen.add(k);
+  }
+  for (const k of custom) if (!seen.has(k)) out.push({ key: k, visible: true, title: '' });
+  return out;
+}
+
+// ---------- puntuaciones ----------
+
+// Promedio por libro: cuenta la última puntuación visible de cada persona.
+async function bookRatings() {
+  const rows = await db.all(
+    "SELECT id, user_id, book_id, rating FROM comments WHERE status = 'visible' AND rating IS NOT NULL AND book_id IS NOT NULL ORDER BY id ASC"
+  );
+  const latest = new Map();
+  rows.forEach((r) => latest.set(`${r.user_id}:${r.book_id}`, r));
+  const agg = {};
+  for (const r of latest.values()) {
+    const a = (agg[r.book_id] = agg[r.book_id] || { sum: 0, count: 0 });
+    a.sum += Number(r.rating);
+    a.count += 1;
+  }
+  const out = {};
+  for (const [id, a] of Object.entries(agg)) out[id] = { avg: Math.round((a.sum / a.count) * 10) / 10, count: a.count };
+  return out;
+}
+
+// Libros comprados por cada usuario en pedidos aprobados.
+async function purchasesByUser(userId) {
+  const rows = userId
+    ? await db.all(`SELECT user_id, items FROM orders WHERE user_id = ? AND status IN ('pagado', 'enviado', 'entregado')`, [userId])
+    : await db.all(`SELECT user_id, items FROM orders WHERE status IN ('pagado', 'enviado', 'entregado')`);
+  const map = new Map();
+  rows.forEach((r) => {
+    const set = map.get(r.user_id) || new Set();
+    parseJson(r.items, []).forEach((i) => set.add(Number(i.bookId)));
+    map.set(r.user_id, set);
+  });
+  return map;
+}
+
+// ---------- visitas y personas en línea ----------
+
+const presence = new Map(); // visitante → último aviso
+const lastView = new Map(); // visitante → última visita contada
+let totalViews = null;
+const dayAR = (d = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(d);
+
+function onlineCount() {
+  const limit = Date.now() - 75000;
+  for (const [k, t] of presence) if (t < limit) presence.delete(k);
+  return presence.size;
+}
+
+async function getTotalViews() {
+  if (totalViews === null) {
+    const r = await db.get('SELECT SUM(views) AS n FROM visits_daily');
+    totalViews = Number(r && r.n) || 0;
+  }
+  return totalViews;
+}
+
+async function countView(vid) {
+  const t = Date.now();
+  // Una "visita" es una sesión: las recargas dentro de 30 minutos no suman.
+  if (t - (lastView.get(vid) || 0) < 30 * 60000) return;
+  lastView.set(vid, t);
+  if (lastView.size > 50000) lastView.clear();
+  await getTotalViews(); // carga el total antes de sumar, así no se cuenta dos veces
+  const day = dayAR();
+  await db.run('INSERT INTO visits_daily (day, views, uniques) VALUES (?, 1, 0) ON CONFLICT (day) DO UPDATE SET views = visits_daily.views + 1', [day]);
+  const added = await db.run('INSERT INTO visitor_seen (day, vid) VALUES (?, ?) ON CONFLICT DO NOTHING', [day, vid]);
+  if (added) await db.run('UPDATE visits_daily SET uniques = uniques + 1 WHERE day = ?', [day]);
+  totalViews += 1;
+}
+
+app.post(
+  '/api/ping',
+  wrap(async (req, res) => {
+    const raw = String(req.body.vid || '');
+    if (!/^[A-Za-z0-9-]{8,64}$/.test(raw)) throw new HttpError(400, 'Visitante inválido.');
+    const vid = tokenHash(raw).slice(0, 32);
+    const isAdmin = req.user && req.user.role === 'admin';
+    const bot = /bot|crawl|spider|slurp|preview|headless|lighthouse/i.test(req.get('user-agent') || '');
+    if (!isAdmin && !bot) {
+      presence.set(vid, Date.now());
+      if (req.body.view) await countView(vid);
+    }
+    const settings = (await getContent('settings')) || {};
+    const show = settings.showCounter !== false;
+    res.json(show || isAdmin ? { online: onlineCount(), total: await getTotalViews(), show } : { show: false });
+  })
+);
+
+// ---------- dudas y consultas ----------
+
+const inquiryTimes = new Map(); // límite por IP: 5 por hora
+
+app.post(
+  '/api/inquiries',
+  wrap(async (req, res) => {
+    // Campo trampa para robots: si viene completo, se responde OK sin guardar.
+    if (req.body.website) return res.json({ ok: true });
+    const t = Date.now();
+    const list = (inquiryTimes.get(req.ip) || []).filter((x) => x > t - 3600000);
+    if (list.length >= 5) throw new HttpError(429, 'Mandaste varias consultas seguidas. Probá de nuevo en un rato.');
+    const name = str(req.body.name, 120, { required: true, field: 'tu nombre' });
+    const email = validEmail(req.body.email);
+    const message = str(req.body.message, 3000, { required: true, field: 'tu consulta' });
+    if (message.length < 5) throw new HttpError(400, 'Contanos un poco más en la consulta.');
+    list.push(t);
+    inquiryTimes.set(req.ip, list);
+    const row = await db.get(
+      'INSERT INTO inquiries (user_id, name, email, message, status, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+      [req.user ? req.user.id : null, name, email, message, 'nueva', now()]
+    );
+    res.status(201).json({ ok: true, id: row.id });
+    notifyInquiry(row.id, req).catch((err) => console.error('Mail de consulta:', err.message));
+  })
+);
+
+async function notifyInquiry(id, req) {
+  if (!mailer.mailStatus().configured) return;
+  const settings = (await getContent('settings')) || {};
+  const seller = settings.notifyEmail || settings.contactEmail;
+  if (!seller) return;
+  const q = await db.get('SELECT * FROM inquiries WHERE id = ?', [id]);
+  await mailer.sendMail({
+    to: seller,
+    replyTo: q.email,
+    fromName: settings.siteName,
+    ...mailer.inquiryEmail({ inquiry: q, settings, siteUrl: siteUrl(req), accent: await emailAccent() }),
+  });
+}
+
 // ---------- comentarios ----------
 
 const COMMENT_STATUSES = ['visible', 'pendiente', 'oculto'];
@@ -832,6 +1021,7 @@ function commentOut(c, viewer) {
     bookId: c.book_id,
     bookTitle: c.book_title || '',
     status: c.status,
+    rating: c.rating ? Number(c.rating) : null,
     editedByAdmin: Boolean(c.edited_by_admin),
     createdAt: c.created_at,
     mine: Boolean(viewer && viewer.id === c.user_id),
@@ -860,11 +1050,19 @@ app.get(
     if (req.user) {
       reported = (await db.all('SELECT comment_id FROM comment_reports WHERE user_id = ?', [req.user.id])).map((r) => r.comment_id);
     }
+    const purchases = await purchasesByUser(null);
+    const mine = req.user ? purchases.get(req.user.id) : null;
     res.json({
       enabled: settings.commentsEnabled !== false,
       moderation: Boolean(settings.commentsModeration),
+      buyersOnly: settings.commentsBuyersOnly !== false,
       rules: settings.commentRules || '',
-      comments: rows.map((c) => ({ ...commentOut(c, req.user), reportedByMe: reported.includes(c.id) })),
+      me: req.user ? { hasPurchase: Boolean(mine && mine.size), purchasedBookIds: mine ? [...mine] : [] } : null,
+      comments: rows.map((c) => ({
+        ...commentOut(c, req.user),
+        reportedByMe: reported.includes(c.id),
+        verified: Boolean(c.book_id && purchases.get(c.user_id) && purchases.get(c.user_id).has(c.book_id)),
+      })),
     });
   })
 );
@@ -882,6 +1080,16 @@ app.post(
       bookId = int(req.body.bookId, 1, 1e9, 'El libro');
       if (!(await db.get('SELECT id FROM books WHERE id = ? AND published = 1', [bookId]))) bookId = null;
     }
+    const bought = (await purchasesByUser(req.user.id)).get(req.user.id) || new Set();
+    if (settings.commentsBuyersOnly !== false && req.user.role !== 'admin' && !bought.size) {
+      throw new HttpError(403, 'Los comentarios se habilitan cuando se aprueba tu primera compra.');
+    }
+    let rating = null;
+    if (req.body.rating !== undefined && req.body.rating !== null && req.body.rating !== '') {
+      rating = int(req.body.rating, 1, 5, 'La puntuación');
+      if (!bookId) throw new HttpError(400, 'Elegí el libro que querés puntuar.');
+      if (!bought.has(bookId)) throw new HttpError(403, 'Solo podés puntuar los libros que compraste.');
+    }
     if (req.user.role !== 'admin') {
       const t = Date.now();
       const list = (commentTimes.get(req.user.id) || []).filter((x) => x > t - 86400000);
@@ -892,8 +1100,8 @@ app.post(
     }
     const status = settings.commentsModeration && req.user.role !== 'admin' ? 'pendiente' : 'visible';
     const row = await db.get(
-      'INSERT INTO comments (user_id, book_id, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
-      [req.user.id, bookId, body, status, now(), now()]
+      'INSERT INTO comments (user_id, book_id, body, status, created_at, updated_at, rating) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
+      [req.user.id, bookId, body, status, now(), now(), rating]
     );
     const c = await db.get(`${COMMENT_SELECT} WHERE c.id = ?`, [row.id]);
     res.status(201).json({ comment: commentOut(c, req.user) });
@@ -961,8 +1169,26 @@ function validateContent(key, body) {
       paymentInstructions: str(body.paymentInstructions, 1500, { field: 'las instrucciones de pago' }),
       commentsEnabled: body.commentsEnabled === true || body.commentsEnabled === 'on',
       commentsModeration: body.commentsModeration === true || body.commentsModeration === 'on',
+      commentsBuyersOnly: body.commentsBuyersOnly === true || body.commentsBuyersOnly === 'on',
+      showCounter: body.showCounter === true || body.showCounter === 'on',
       commentRules: str(body.commentRules, 800, { field: 'las normas de comentarios' }),
     };
+  }
+  if (key === 'layout') {
+    if (!Array.isArray(body)) throw new HttpError(400, 'Formato de orden inválido.');
+    return body.slice(0, 40).map((e) => ({
+      key: str(e.key, 40),
+      visible: e.visible !== false,
+      title: str(e.title, 80, { field: 'el título de la sección' }),
+    }));
+  }
+  if (key === 'faq') {
+    if (!Array.isArray(body)) throw new HttpError(400, 'Formato de preguntas inválido.');
+    return body.slice(0, 40).map((f, i) => ({
+      id: str(f.id, 40) || `f${Date.now()}${i}`,
+      q: str(f.q, 200, { required: true, field: 'la pregunta' }),
+      a: str(f.a, 2000, { required: true, field: 'la respuesta' }),
+    }));
   }
   if (key === 'appearance') {
     const a = theme.normalize(body);
@@ -972,6 +1198,18 @@ function validateContent(key, body) {
       if (body[k] && !/^#[0-9a-fA-F]{6}$/.test(body[k])) throw new HttpError(400, 'Los colores tienen que tener el formato #RRGGBB.');
     }
     return a;
+  }
+  if (key === 'sections') {
+    if (!Array.isArray(body)) throw new HttpError(400, 'Formato de secciones inválido.');
+    return body.slice(0, 12).map((s) => ({
+      id: /^c_[a-z0-9]{4,24}$/.test(s.id || '') ? s.id : `c_${crypto.randomBytes(5).toString('hex')}`,
+      title: str(s.title, 80, { required: true, field: 'el título de la sección' }),
+      eyebrow: str(s.eyebrow, 60, { field: 'la etiqueta' }),
+      body: str(s.body, 6000, { field: 'el texto de la sección' }),
+      imageSide: s.imageSide === 'izquierda' ? 'izquierda' : 'derecha',
+      buttonText: str(s.buttonText, 40, { field: 'el texto del botón' }),
+      buttonUrl: safeUrl(s.buttonUrl),
+    }));
   }
   if (key === 'author') {
     const facts = (Array.isArray(body.facts) ? body.facts : []).slice(0, 6).map((f) => ({
@@ -1020,7 +1258,17 @@ admin.put(
       const prev = (await getContent('author')) || {};
       value.photo = imageField(req.body.photo, prev.photo);
     }
+    if (key === 'sections') {
+      // Las imágenes se conservan si no se mandó una nueva.
+      const prev = (await getContent('sections')) || [];
+      value.forEach((s, i) => {
+        const old = prev.find((p) => p.id === s.id) || {};
+        s.image = imageField(req.body[i].image, old.image);
+        s.updated = s.image !== old.image || !old.updated ? now() : old.updated;
+      });
+    }
     await setContent(key, value);
+    if (key === 'sections' || key === 'layout') await setContent('layout', await currentLayout());
     res.json({ ok: true });
   })
 );
@@ -1178,6 +1426,89 @@ admin.put(
 );
 
 admin.get(
+  '/stats',
+  wrap(async (req, res) => {
+    const today = dayAR();
+    const from = dayAR(new Date(Date.now() - 29 * 86400000));
+    const rows = await db.all('SELECT day, views, uniques FROM visits_daily WHERE day >= ? ORDER BY day ASC', [from]);
+    const byDay = Object.fromEntries(rows.map((r) => [r.day, r]));
+    const days = [];
+    for (let i = 29; i >= 0; i--) {
+      const d = dayAR(new Date(Date.now() - i * 86400000));
+      const r = byDay[d];
+      days.push({ day: d, views: r ? Number(r.views) : 0, uniques: r ? Number(r.uniques) : 0 });
+    }
+    const t = byDay[today];
+    res.json({
+      online: onlineCount(),
+      total: await getTotalViews(),
+      today: { views: t ? Number(t.views) : 0, uniques: t ? Number(t.uniques) : 0 },
+      days,
+    });
+  })
+);
+
+admin.get(
+  '/inquiries',
+  wrap(async (req, res) => {
+    const rows = await db.all('SELECT * FROM inquiries ORDER BY id DESC LIMIT 300');
+    res.json({
+      inquiries: rows.map((q) => ({
+        id: q.id,
+        name: q.name,
+        email: q.email,
+        message: q.message,
+        status: q.status,
+        reply: q.reply,
+        createdAt: q.created_at,
+        repliedAt: q.replied_at,
+      })),
+    });
+  })
+);
+
+admin.post(
+  '/inquiries/:id/reply',
+  wrap(async (req, res) => {
+    const q = await db.get('SELECT * FROM inquiries WHERE id = ?', [Number(req.params.id)]);
+    if (!q) throw new HttpError(404, 'Esa consulta ya no existe.');
+    const reply = str(req.body.reply, 4000, { required: true, field: 'la respuesta' });
+    const settings = (await getContent('settings')) || {};
+    try {
+      await mailer.sendMail({
+        to: q.email,
+        toName: q.name,
+        replyTo: settings.notifyEmail || settings.contactEmail || undefined,
+        fromName: settings.siteName,
+        ...mailer.inquiryReplyEmail({ inquiry: q, reply, settings, accent: await emailAccent() }),
+      });
+    } catch (err) {
+      throw new HttpError(502, `No se pudo enviar la respuesta: ${err.message}`);
+    }
+    await db.run("UPDATE inquiries SET status = 'respondida', reply = ?, replied_at = ? WHERE id = ?", [reply, now(), q.id]);
+    res.json({ ok: true });
+  })
+);
+
+admin.put(
+  '/inquiries/:id',
+  wrap(async (req, res) => {
+    const status = String(req.body.status || '');
+    if (!['nueva', 'respondida', 'archivada'].includes(status)) throw new HttpError(400, 'Estado inválido.');
+    await db.run('UPDATE inquiries SET status = ? WHERE id = ?', [status, Number(req.params.id)]);
+    res.json({ ok: true });
+  })
+);
+
+admin.delete(
+  '/inquiries/:id',
+  wrap(async (req, res) => {
+    await db.run('DELETE FROM inquiries WHERE id = ?', [Number(req.params.id)]);
+    res.json({ ok: true });
+  })
+);
+
+admin.get(
   '/users',
   wrap(async (req, res) => {
     const users = await db.all('SELECT id, name, email, role, phone, created_at FROM users ORDER BY id DESC LIMIT 1000');
@@ -1269,7 +1600,10 @@ const escHtml = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;'
 const sendIndex = wrap(async (req, res) => {
   const settings = (await getContent('settings')) || {};
   const css = theme.css(await getContent('appearance'));
-  let html = INDEX_HTML.replace('<style id="appearanceStyle"></style>', `<style id="appearanceStyle">${css}</style>`).replace(
+  const fontsHref = theme.fontsHref(await getContent('appearance'));
+  let html = INDEX_HTML.replace('<style id="appearanceStyle"></style>', `<style id="appearanceStyle">${css}</style>`)
+    .replace(/<link id="fontsLink" rel="stylesheet" href="[^"]*">/, `<link id="fontsLink" rel="stylesheet" href="${escHtml(fontsHref)}">`)
+    .replace(
     /(href|src)="\/(styles\.css|theme\.js|app\.js)"/g,
     `$1="/$2?v=${ASSET_VERSION}"`
   );
@@ -1374,7 +1708,14 @@ async function seedIfEmpty() {
   }
   await db.run('DELETE FROM sessions WHERE expires_at < ?', [now()]);
   await db.run('DELETE FROM password_resets WHERE expires_at < ?', [now()]);
+  if (!(await getContent('faq'))) await setContent('faq', seed.FAQ);
+  await pruneVisitors();
 }
+
+async function pruneVisitors() {
+  await db.run('DELETE FROM visitor_seen WHERE day < ?', [dayAR(new Date(Date.now() - 40 * 86400000))]);
+}
+setInterval(() => pruneVisitors().catch(() => {}), 24 * 3600000).unref();
 
 db.init()
   .then(seedIfEmpty)

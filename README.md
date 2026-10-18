@@ -10,7 +10,9 @@ Sitio para un escritor o escritora con biografía, libros a la venta, lecturas r
 - Lecturas recomendadas y redes sociales.
 - Carrito, creación de cuenta, checkout con envío o retiro, e historial de pedidos en "Mi cuenta".
 - Pago con **Mercado Pago** (tarjeta, débito o dinero en cuenta) o por transferencia. Si un pago falla, se puede reintentar desde "Mi cuenta".
-- **Comentarios** públicos: cualquier usuario registrado puede comentar (en general o sobre un libro), borrar los suyos y denunciar los de otros.
+- **Comentarios y puntuaciones**: se habilitan cuando el usuario tiene una compra aprobada (configurable). Puntúa de 1 a 5 estrellas los libros que compró; el promedio aparece en el estante y en la ficha del libro, y el comentario lleva la marca "Compró el libro".
+- **Dudas y consultas**: preguntas frecuentes y un formulario de consulta que no requiere cuenta.
+- **Contador** de visitas y de personas en línea en el pie (se puede ocultar).
 - **¿Olvidaste tu contraseña o tu email?**: llega un mail con el usuario (email de la cuenta) y un link para crear una contraseña nueva. El link sirve una sola vez y vence en una hora. Después del cambio llega un aviso de seguridad.
 
 **Para el administrador** (login al pie de la página)
@@ -18,6 +20,10 @@ Sitio para un escritor o escritora con biografía, libros a la venta, lecturas r
 - Crear, editar, ocultar, destacar y borrar libros; subir tapas o usar tapas tipográficas de color.
 - Editar lecturas recomendadas y redes (con orden).
 - Ver pedidos y cambiar su estado (pendiente, pagado, enviado, entregado, cancelado). Cancelar devuelve el stock.
+- **Secciones**: ordenarlas de arriba hacia abajo, ocultarlas, cambiarles el nombre y crear secciones propias (título, texto, imagen y botón con enlace). El menú se arma solo.
+- **Consultas**: bandeja con las consultas recibidas, respuesta por mail desde el panel, archivar y editar las preguntas frecuentes.
+- **Estadísticas**: personas en línea ahora, visitas y visitantes por día (gráfico de 30 días) y total.
+- **Tipografía**: 7 combinaciones de letras en Apariencia (clásica, Garamond, moderna, romántica, técnica, máquina de escribir y alta legibilidad).
 - Moderar comentarios: editar (queda marcado "Editado por moderación"), ocultar, aprobar, borrar y ver denuncias. Opcional: revisar cada comentario antes de publicarlo.
 - Ver usuarios, crear cuentas, dar o quitar el rol de administrador y enviarle a cualquier usuario el link para crear una contraseña nueva.
 - Apariencia: tamaño de letra (85 % a 130 %), color de letras, fondo y acento, con paletas listas, vista previa en vivo y aviso si el contraste es bajo.
@@ -90,6 +96,13 @@ Render borra el disco en cada deploy, así que en producción se usa PostgreSQL.
      - `BREVO_API_KEY`, `MAIL_FROM` y las demás de la sección de mails
 4. Deploy. Con `DATABASE_URL` definida el servidor usa PostgreSQL automáticamente y crea las tablas solo.
 
+## Claves secretas y repositorio público
+
+Ninguna clave va en el código. `MP_ACCESS_TOKEN`, `BREVO_API_KEY`, `DATABASE_URL` y `ADMIN_PASSWORD` se cargan **solo** en Render → tu Web Service → **Environment**. Esas variables son privadas: no se ven en GitHub ni en el sitio, aunque el repositorio sea público.
+
+- Nunca las escribas en archivos del proyecto ni en un `.env` que subas (el `.gitignore` ya excluye `.env`).
+- Si alguna vez subiste una clave por error, borrarla del archivo no alcanza (queda en el historial): generá una nueva en Mercado Pago o Brevo y reemplazala en Render.
+
 ## Configurar Mercado Pago
 
 El sitio usa **Checkout Pro**: el comprador confirma el pedido, va a la página de Mercado Pago, paga y vuelve al sitio. El pago se verifica siempre consultando la API de Mercado Pago con tu Access Token, así que nadie puede marcar un pedido como pagado modificando la URL.
@@ -114,6 +127,13 @@ Detalles:
 - Límite: un comentario cada 30 segundos y 20 por día por usuario, de hasta 1000 caracteres.
 - En **Ajustes → Comentarios** podés cerrarlos, activar la **revisión previa** (no se publican hasta que los aprobás, y te llega un mail por cada uno) y escribir las **normas** que se muestran junto al formulario.
 - En **Panel → Comentarios** filtrás por denunciados, pendientes u ocultos. Como admin también ves los botones de moderación directamente en la página.
+
+## Visitas
+
+- Una **visita** es una sesión: las recargas de la misma persona dentro de 30 minutos no suman. **Visitantes** cuenta personas distintas por día.
+- **En línea** son las personas con la página abierta en el último minuto (la página avisa cada 30 segundos mientras está visible).
+- No se cuentan los robots ni tus visitas como administrador. No se guardan IPs: cada navegador tiene un identificador al azar que se guarda cifrado.
+- En el plan gratis de Render el servidor se duerme tras 15 minutos sin visitas: el contador de "en línea" vuelve a cero, pero las visitas quedan guardadas en la base.
 
 ## Recuperar contraseñas
 
@@ -170,7 +190,11 @@ public/
 | GET / POST / DELETE | `/api/comments[/:id]` | Ver, publicar y borrar comentarios |
 | POST | `/api/comments/:id/report` | Denunciar un comentario |
 | PUT | `/api/admin/comments/:id` | Editar, ocultar, aprobar o quitar denuncias |
-| PUT | `/api/admin/content/:key` | `settings`, `author`, `socials`, `recommendations`, `appearance` |
+| POST | `/api/ping` | Aviso de visita y de presencia (devuelve visitas y personas en línea) |
+| POST | `/api/inquiries` | Enviar una consulta |
+| GET / POST / PUT / DELETE | `/api/admin/inquiries[/:id][/reply]` | Bandeja de consultas y respuesta por mail |
+| GET | `/api/admin/stats` | Estadísticas de visitas |
+| PUT | `/api/admin/content/:key` | `settings`, `author`, `socials`, `recommendations`, `appearance`, `layout`, `sections`, `faq` |
 | POST / PUT / DELETE | `/api/admin/books[/:id]` | Libros |
 | GET / PUT | `/api/admin/orders[/:id]` | Pedidos y estados |
 | POST | `/api/admin/orders/:id/resend` | Reenviar los mails de un pedido |

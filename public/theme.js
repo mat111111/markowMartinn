@@ -15,7 +15,36 @@
     { id: 'contraste', name: 'Alto contraste', custom: true, textColor: '#000000', bgColor: '#ffffff', accentColor: '#0033cc' },
   ];
 
-  var DEFAULTS = { fontScale: 100, custom: false, textColor: '#14181f', bgColor: '#f3f4f1', accentColor: '#2539c2' };
+  // Combinaciones tipográficas (títulos / textos largos / interfaz), todas de Google Fonts.
+  var FONTS = [
+    { id: 'clasica', name: 'Clásica', display: '"Bodoni Moda", "Didot", Georgia, serif', text: '"Literata", Georgia, serif', ui: '"Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif',
+      q: 'family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..700;1,6..96,400..600&family=Literata:ital,opsz,wght@0,7..72,400..600;1,7..72,400&family=Schibsted+Grotesk:wght@400..700' },
+    { id: 'garamond', name: 'Garamond', display: '"EB Garamond", Garamond, Georgia, serif', text: '"EB Garamond", Garamond, Georgia, serif', ui: '"Work Sans", Arial, sans-serif',
+      q: 'family=EB+Garamond:ital,wght@0,400..700;1,400..600&family=Work+Sans:wght@400..700' },
+    { id: 'moderna', name: 'Moderna', display: '"DM Serif Display", Georgia, serif', text: '"Source Serif 4", Georgia, serif', ui: '"DM Sans", Arial, sans-serif',
+      q: 'family=DM+Serif+Display:ital@0;1&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..600;1,8..60,400&family=DM+Sans:opsz,wght@9..40,400..700' },
+    { id: 'romantica', name: 'Romántica', display: '"Playfair Display", Georgia, serif', text: '"Lora", Georgia, serif', ui: '"Manrope", Arial, sans-serif',
+      q: 'family=Playfair+Display:ital,wght@0,400..700;1,400..600&family=Lora:ital,wght@0,400..600;1,400&family=Manrope:wght@400..700' },
+    { id: 'tecnica', name: 'Técnica', display: '"Space Grotesk", Arial, sans-serif', text: '"IBM Plex Serif", Georgia, serif', ui: '"IBM Plex Sans", Arial, sans-serif',
+      q: 'family=Space+Grotesk:wght@400..700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Sans:wght@400;500;600;700' },
+    { id: 'maquina', name: 'Máquina de escribir', display: '"Special Elite", "Courier New", monospace', text: '"Courier Prime", "Courier New", monospace', ui: '"IBM Plex Mono", "Courier New", monospace',
+      q: 'family=Special+Elite&family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600' },
+    { id: 'legible', name: 'Alta legibilidad', display: '"Atkinson Hyperlegible", Arial, sans-serif', text: '"Atkinson Hyperlegible", Arial, sans-serif', ui: '"Atkinson Hyperlegible", Arial, sans-serif',
+      q: 'family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400;1,700' },
+  ];
+  function font(id) {
+    for (var i = 0; i < FONTS.length; i++) if (FONTS[i].id === id) return FONTS[i];
+    return FONTS[0];
+  }
+  function fontsHref(a) {
+    return 'https://fonts.googleapis.com/css2?' + font(normalize(a).font).q + '&display=swap';
+  }
+  // Todas juntas, para las muestras del panel.
+  function allFontsHref() {
+    return 'https://fonts.googleapis.com/css2?' + FONTS.map(function (f) { return f.q; }).join('&') + '&display=swap';
+  }
+
+  var DEFAULTS = { fontScale: 100, font: 'clasica', custom: false, textColor: '#14181f', bgColor: '#f3f4f1', accentColor: '#2539c2' };
 
   function rgb(hex) {
     var n = parseInt(hex.slice(1), 16);
@@ -48,6 +77,7 @@
     var scale = Number(a.fontScale);
     return {
       fontScale: scale >= 85 && scale <= 130 ? Math.round(scale) : 100,
+      font: font(a.font).id,
       custom: Boolean(a.custom),
       textColor: HEX.test(a.textColor) ? a.textColor.toLowerCase() : DEFAULTS.textColor,
       bgColor: HEX.test(a.bgColor) ? a.bgColor.toLowerCase() : DEFAULTS.bgColor,
@@ -59,6 +89,12 @@
     a = normalize(a);
     var v = {};
     if (a.fontScale !== 100) v['font-size'] = a.fontScale + '%';
+    if (a.font !== 'clasica') {
+      var f = font(a.font);
+      v['--f-display'] = f.display;
+      v['--f-text'] = f.text;
+      v['--f-ui'] = f.ui;
+    }
     if (!a.custom) return v;
 
     var ink = a.textColor, paper = a.bgColor, accent = a.accentColor;
@@ -114,7 +150,7 @@
     return out;
   }
 
-  var api = { PRESETS: PRESETS, DEFAULTS: DEFAULTS, normalize: normalize, vars: vars, css: css, warnings: warnings, contrast: contrast };
+  var api = { PRESETS: PRESETS, DEFAULTS: DEFAULTS, FONTS: FONTS, fontsHref: fontsHref, allFontsHref: allFontsHref, normalize: normalize, vars: vars, css: css, warnings: warnings, contrast: contrast };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.SiteTheme = api;
 })(typeof window !== 'undefined' ? window : globalThis);

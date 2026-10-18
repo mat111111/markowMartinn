@@ -81,6 +81,27 @@ CREATE TABLE IF NOT EXISTS comment_reports (
   created_at TEXT NOT NULL,
   PRIMARY KEY (comment_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS visits_daily (
+  day TEXT PRIMARY KEY,
+  views INTEGER NOT NULL DEFAULT 0,
+  uniques INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS visitor_seen (
+  day TEXT NOT NULL,
+  vid TEXT NOT NULL,
+  PRIMARY KEY (day, vid)
+);
+CREATE TABLE IF NOT EXISTS inquiries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'nueva',
+  reply TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  replied_at TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS content (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -115,6 +136,7 @@ async function init() {
   await addColumn('orders', 'payment_method', "TEXT NOT NULL DEFAULT 'transferencia'");
   await addColumn('orders', 'mp_payment_id', "TEXT NOT NULL DEFAULT ''");
   await addColumn('orders', 'mp_status', "TEXT NOT NULL DEFAULT ''");
+  await addColumn('comments', 'rating', 'INTEGER');
 }
 
 async function addColumn(table, column, definition) {
